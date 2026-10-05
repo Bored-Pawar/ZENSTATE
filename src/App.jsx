@@ -1,0 +1,28 @@
+import { Navigate, Route, Routes } from "react-router-dom";
+import AppLayout from "./components/AppLayout";
+import Login from "./pages/Login";
+import Today from "./pages/Today";
+import Timetable from "./pages/Timetable";
+import Planner from "./pages/Planner";
+import Tasks from "./pages/Tasks";
+import TaskDetail from "./pages/TaskDetail";
+import Journal from "./pages/Journal";
+import DisciplineReport from "./pages/DisciplineReport";
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route element={<AppLayout />}>
+        <Route path="/today" element={<Today />} />
+        <Route path="/timetable" element={<Timetable />} />
+        <Route path="/planner" element={<Planner />} />
+        <Route path="/tasks" element={<Tasks />} />
+        <Route path="/tasks/:taskId" element={<TaskDetail />} />
+        <Route path="/journal" element={<Journal />} />
+        <Route path="/discipline-report" element={<DisciplineReport />} />
+      </Route>
+      <Route path="*" element={<Navigate to="/login" replace />} />
+    </Routes>
+  );
+}
