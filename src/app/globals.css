@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --color-bg: #f6f7fb;
+  --color-ink: #20222c;
+  --color-ink-2: #4c5162;
+  --color-ink-3: #5a6072;
+  --color-nav: #565a6b;
+  --color-muted: #8a8fa0;
+  --color-faint: #a7abbb;
+  --color-line: #e7e9f2;
+  --color-line-2: #f0f1f6;
+  --color-field: #f7f8fc;
+  --color-track: #eef0f6;
+
+  --color-accent: #9184d9;
+  --color-accent-ink: #6a5bc0;
+  --color-accent-deep: #4a3f86;
+  --color-accent-chip: #5a4bb0;
+  --color-tint: #f1eefb;
+  --color-tint-2: #f6f5fd;
+  --color-tint-3: #e4ddfb;
+  --color-edge: #ddd6f7;
+
+  --color-warn: #a8791f;
+  --color-warn-deep: #8a6d1f;
+  --color-warn-bg: #f6efdd;
+  --color-warn-bar: #e6c98a;
+  --color-ok: #6a9a78;
+  --color-ok-ink: #5a8a6b;
+  --color-ok-bg: #eaf2ec;
+
+  --shadow-card: 0 1px 2px rgba(20, 22, 40, 0.05), 0 6px 20px rgba(20, 22, 40, 0.07);
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-transparent px-4 py-2 text-sm font-medium leading-tight no-underline transition-colors disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply border-accent text-accent-ink hover:bg-accent/10 active:bg-accent/20;
+  }
+  .btn-secondary {
+    @apply border-line text-ink hover:bg-ink/5 active:bg-ink/10;
+  }
+  .tag {
+    @apply inline-flex items-center rounded-md px-2.5 py-0.5 text-[11px] tracking-wide;
+  }
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.1em] text-accent-ink;
+  }
+  .card {
+    @apply rounded-xl border border-line bg-white;
+  }
+  .input {
+    @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-accent;
+  }
+}
