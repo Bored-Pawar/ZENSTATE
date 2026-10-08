@@ -53,6 +53,9 @@ export const initialTasks = [
     done: false,
     note: "Compare three direct competitors and add sources.",
     priority: "High",
+    scheduleType: "scheduled",
+    scheduledSlots: [{ day: "Mon", start: 14, end: 15.5 }],
+    journalEnabled: true,
   },
   {
     id: "t2",
@@ -63,6 +66,9 @@ export const initialTasks = [
     done: false,
     note: "Focus on the customer lifecycle section.",
     priority: "Medium",
+    scheduleType: "flexible",
+    scheduledSlots: [],
+    journalEnabled: false,
   },
   {
     id: "t3",
@@ -73,6 +79,9 @@ export const initialTasks = [
     done: false,
     note: "Start rough. Clarity matters more than perfection.",
     priority: "High",
+    scheduleType: "scheduled",
+    scheduledSlots: [{ day: "Tue", start: 10, end: 12 }],
+    journalEnabled: true,
   },
   {
     id: "t4",
@@ -83,6 +92,9 @@ export const initialTasks = [
     done: true,
     note: "Moved Friday study block to 10am.",
     priority: "Low",
+    scheduleType: "flexible",
+    scheduledSlots: [],
+    journalEnabled: false,
   },
   {
     id: "t5",
@@ -93,6 +105,9 @@ export const initialTasks = [
     done: false,
     note: "Define what a successful demo looks like.",
     priority: "Medium",
+    scheduleType: "flexible",
+    scheduledSlots: [],
+    journalEnabled: true,
   },
 ];
 export const initialJournal = [

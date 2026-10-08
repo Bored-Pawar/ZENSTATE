@@ -4,6 +4,9 @@ import Login from "./pages/Login";
 import Today from "./pages/Today";
 import Timetable from "./pages/Timetable";
 import Planner from "./pages/Planner";
+import PlannerReview from "./pages/PlannerReview";
+import PlannerAvailability from "./pages/PlannerAvailability";
+import PlannerConfirmation from "./pages/PlannerConfirmation";
 import Tasks from "./pages/Tasks";
 import TaskDetail from "./pages/TaskDetail";
 import Journal from "./pages/Journal";
@@ -17,6 +20,9 @@ export default function App() {
         <Route path="/today" element={<Today />} />
         <Route path="/timetable" element={<Timetable />} />
         <Route path="/planner" element={<Planner />} />
+        <Route path="/planner/review" element={<PlannerReview />} />
+        <Route path="/planner/availability" element={<PlannerAvailability />} />
+        <Route path="/planner/confirmation" element={<PlannerConfirmation />} />
         <Route path="/tasks" element={<Tasks />} />
         <Route path="/tasks/:taskId" element={<TaskDetail />} />
         <Route path="/journal" element={<Journal />} />

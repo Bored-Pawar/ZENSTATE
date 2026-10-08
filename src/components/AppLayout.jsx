@@ -1,5 +1,7 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { useApp } from "../context/AppContext";
+import { useEffect, useState } from "react";
+import NotificationPopup from "./NotificationPopup";
 const links = [
   ["/today", "Today", "◉"],
   ["/timetable", "Timetable", "▦"],
@@ -11,6 +13,12 @@ const links = [
 export default function AppLayout() {
   const { state } = useApp();
   const location = useLocation();
+  const [showNotification, setShowNotification] = useState(false);
+  const [clock, setClock] = useState(new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 60000);
+    return () => window.clearInterval(timer);
+  }, []);
   const title =
     links.find(([p]) => location.pathname.startsWith(p))?.[1] || "ZenState";
   return (
@@ -50,9 +58,10 @@ export default function AppLayout() {
             <h1>{title}</h1>
           </div>
           <div className="top-actions">
-            <span className="date-chip">Mon, 5 Oct</span>
-            <span className="notification">●</span>
+            <span className="date-chip">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+            <button className="notification" onClick={() => setShowNotification(true)} title="Show reminder">●</button>
           </div>
+          {showNotification && <NotificationPopup onClose={() => setShowNotification(false)} />}
         </header>
         <Outlet />
       </main>

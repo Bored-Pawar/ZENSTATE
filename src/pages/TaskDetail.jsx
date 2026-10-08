@@ -12,7 +12,7 @@ export default function TaskDetail() {
           ← Back to tasks
         </Link>
         <p className="eyebrow">
-          {task.category} · {task.duration} MINUTES
+          {task.category} · {task.duration} MINUTES · {task.scheduleType === "scheduled" ? "SCHEDULED" : "FLEXIBLE TODAY"}
         </p>
         <h2>{task.title}</h2>
         <p className="detail-note">
@@ -47,6 +47,12 @@ export default function TaskDetail() {
             placeholder="Write notes, ideas or a reflection after you finish..."
           />
         </article>
+        {task.journalEnabled && (
+          <article className="task-journal-note">
+            <strong>Task journal enabled</strong>
+            <span>This task has a focused journal while it remains active.</span>
+          </article>
+        )}
       </section>
       <aside>
         <article className="small-card">

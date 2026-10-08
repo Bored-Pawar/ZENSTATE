@@ -19,6 +19,9 @@ export default function Tasks() {
         done: false,
         note: "",
         priority: "Medium",
+        scheduleType: "flexible",
+        scheduledSlots: [],
+        journalEnabled: false,
       },
     });
     setTitle("");
@@ -51,13 +54,18 @@ export default function Tasks() {
         </form>
       )}
       <section className="tasks-card">
+        <p className="eyebrow task-group-title">SCHEDULED TASKS</p>
         <div className="task-table-head">
           <span>Task</span>
           <span>Priority</span>
           <span>Due</span>
         </div>
-        {state.tasks.map((t) => (
+        {state.tasks.filter((task) => task.scheduleType === "scheduled").map((t) => (
           <TaskRow task={t} key={t.id} />
+        ))}
+        <p className="eyebrow task-group-title flexible-label">FLEXIBLE TASKS · SHOWING TODAY</p>
+        {state.tasks.filter((task) => task.scheduleType !== "scheduled").map((t) => (
+          <TaskRow task={{ ...t, due: "Today" }} key={t.id} />
         ))}
       </section>
     </div>

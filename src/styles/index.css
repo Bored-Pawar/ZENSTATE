@@ -181,6 +181,28 @@ h3 {
   color: var(--purple);
   font-size: 1.2rem;
 }
+.notification {
+  border: 0;
+  background: transparent;
+  padding: 4px;
+}
+.notification-popup {
+  position: absolute;
+  z-index: 12;
+  right: 0;
+  top: 76px;
+  width: 310px;
+  padding: 20px;
+  background: #fff;
+  border: 1px solid #d9d1ff;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(45, 35, 102, .17);
+}
+.notification-popup h3 { margin: 8px 0; font-family: "Playfair Display"; font-size: 1.2rem; }
+.notification-popup p:not(.eyebrow) { color: var(--muted); font-size: .78rem; line-height: 1.55; }
+.close-popup { position: absolute; top: 8px; right: 11px; border: 0; background: transparent; color: var(--muted); font-size: 1.25rem; }
+.popup-actions { display: flex; gap: 8px; margin-top: 14px; }
+.popup-actions .primary, .popup-actions .secondary { padding: 8px 10px; }
 .primary,
 .secondary,
 .coach-button {
@@ -493,6 +515,35 @@ h3 {
   height: 430px;
   padding: 0 15px;
 }
+.full-day-calendar { max-height: 650px; }
+.full-day-calendar .calendar-body { height: 720px; }
+.full-day-calendar .hour-labels { justify-content: flex-start; }
+.full-day-calendar .hour-labels span { height: 30px; display: block; padding-top: 3px; }
+.full-day-calendar .hour-line { height: 30px; }
+.sleep-block {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  z-index: 1;
+  padding: 5px;
+  overflow: hidden;
+  background: repeating-linear-gradient(135deg, #eef0f7, #eef0f7 6px, #e4e6ef 6px, #e4e6ef 12px);
+  color: #77778b;
+  border-radius: 5px;
+  font-size: .6rem;
+}
+.time-block.task { background: #e8f6ed; border-left-color: #6da88b; color: #397154; z-index: 2; }
+.flexible-time-card { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 17px 20px; margin-bottom: 18px; background: #fff8e9; border: 1px solid #f0dea9; border-radius: 12px; }
+.flexible-time-card h3 { margin: 0; font-family: "Playfair Display"; font-size: 1.18rem; }
+.flexible-time-card p:not(.eyebrow) { max-width: 420px; margin: 0; color: #766849; font-size: .75rem; line-height: 1.55; }
+.modal-backdrop { position: fixed; z-index: 20; inset: 0; background: rgba(36,35,59,.3); display: grid; place-items: center; padding: 20px; }
+.edit-modal { width: min(460px, 100%); padding: 25px; background: #fff; border-radius: 14px; box-shadow: var(--shadow); }
+.edit-modal h3 { font: 1.35rem "Playfair Display"; }
+.edit-modal label { display: grid; gap: 5px; margin: 12px 0; color: var(--muted); font-size: .72rem; }
+.edit-modal input, .edit-modal select { border: 1px solid var(--line); border-radius: 7px; padding: 9px; }
+.modal-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.danger { border: 1px solid #e1a49b; border-radius: 8px; padding: 10px 14px; background: #fff2ef; color: #ae5143; font-weight: 700; font-size: .8rem; }
+.modal-close { border: 0; background: transparent; margin-top: 16px; padding: 0; }
 .hour-labels {
   display: flex;
   flex-direction: column;
@@ -546,6 +597,30 @@ h3 {
   grid-template-columns: minmax(0, 1fr) 310px;
   gap: 25px;
 }
+.flow-page { max-width: 780px; padding: 8px 0 35px; }
+.flow-copy { color: var(--muted); line-height: 1.65; max-width: 650px; }
+.review-card, .confirmation-card { margin-top: 25px; padding: 25px; background: #fff; border: 1px solid var(--line); border-radius: 14px; }
+.review-card label { display: grid; gap: 7px; color: var(--muted); font-size: .72rem; margin: 14px 0; }
+.review-card input, .review-card textarea { border: 1px solid var(--line); border-radius: 7px; padding: 10px; color: var(--ink); resize: vertical; }
+.review-card textarea { min-height: 75px; }
+.toggle-line { display: flex !important; grid-template-columns: 22px 1fr; align-items: start; }
+.toggle-line input { margin-top: 3px; }
+.toggle-line strong, .toggle-line small { display: block; }
+.toggle-line strong { color: var(--ink); }
+.toggle-line small { margin-top: 4px; }
+.flow-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+.availability-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 25px 0; }
+.availability-card { background: #fff; border: 1px solid var(--line); border-radius: 13px; padding: 21px; }
+.availability-card h3 { font: 1.2rem "Playfair Display"; margin: 8px 0 17px; }
+.availability-card p:not(.eyebrow) { color: var(--muted); font-size: .78rem; line-height: 1.6; }
+.slot-option { display: flex; gap: 8px; align-items: center; margin: 10px 0; font-size: .75rem; }
+.availability-card .primary, .availability-card .secondary { margin-top: 13px; }
+.flexible-card { background: #fffaf0; border-color: #f1dfa9; }
+.confirmation-card { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+.confirmation-card div { display: grid; gap: 5px; }
+.confirmation-card span { font: .63rem "DM Mono"; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+.confirmation-card strong { font-size: .87rem; }
+.endpoint-result { color: #3d7d58; background: #edf8f0; border-radius: 8px; padding: 12px; font-size: .78rem; margin-top: 15px; }
 .coach-chat {
   height: 600px;
   border: 1px solid var(--line);
@@ -654,6 +729,8 @@ h3 {
   border-radius: 13px;
   padding: 0 22px;
 }
+.task-group-title { margin: 20px 0 2px; }
+.flexible-label { border-top: 1px solid var(--line); padding-top: 20px; }
 .task-table-head {
   display: grid;
   grid-template-columns: 1fr 90px 78px;
@@ -761,6 +838,13 @@ h3 {
   align-items: center;
   gap: 7px;
 }
+.task-journal-section { margin-top: 23px; }
+.task-journal-card { display: flex; justify-content: space-between; gap: 15px; align-items: center; padding: 15px; margin-top: 10px; background: #f9f8ff; border: 1px solid #e4e0f5; border-radius: 10px; }
+.task-journal-card strong, .task-journal-card small { display: block; }
+.task-journal-card small { color: var(--muted); font-size: .68rem; margin-top: 3px; }
+.task-journal-note { margin-top: 12px; padding: 13px; border-radius: 9px; background: #f1f8f3; color: #4e8064; font-size: .75rem; }
+.task-journal-note strong, .task-journal-note span { display: block; }
+.task-journal-note span { margin-top: 4px; }
 .journal-entry strong {
   font-size: 0.76rem;
 }

@@ -8,16 +8,34 @@ import {
 import { initialBlocks, initialJournal, initialTasks } from "../data/demoData";
 
 const AppContext = createContext();
+const defaultState = {
+  user: { name: "Aditya", email: "aditya@zenstate.app" },
+  blocks: initialBlocks,
+  tasks: initialTasks,
+  journal: initialJournal,
+  coachPlaying: false,
+  planningDraft: {
+    goal: "Prepare the ZenState classroom demonstration",
+    why: "I want to feel confident explaining the product flow.",
+    duration: 90,
+    journalEnabled: true,
+    scheduleType: "scheduled",
+    selectedSlots: [{ day: "Tue", start: 17, end: 18.5 }],
+  },
+};
 const saved = localStorage.getItem("zenstate-demo");
-const initialState = saved
-  ? JSON.parse(saved)
-  : {
-      user: { name: "Aditya", email: "aditya@zenstate.app" },
-      blocks: initialBlocks,
-      tasks: initialTasks,
-      journal: initialJournal,
-      coachPlaying: false,
-    };
+const persisted = saved ? JSON.parse(saved) : null;
+const initialState = persisted
+  ? {
+      ...defaultState,
+      ...persisted,
+      tasks: persisted.tasks.map((task) => ({
+        ...initialTasks.find((item) => item.id === task.id),
+        ...task,
+      })),
+      planningDraft: { ...defaultState.planningDraft, ...persisted.planningDraft },
+    }
+  : defaultState;
 function reducer(state, action) {
   switch (action.type) {
     case "TOGGLE_TASK":
@@ -47,6 +65,21 @@ function reducer(state, action) {
       return { ...state, journal: [action.entry, ...state.journal] };
     case "SET_COACH":
       return { ...state, coachPlaying: action.value };
+    case "SET_PLAN_DRAFT":
+      return { ...state, planningDraft: { ...state.planningDraft, ...action.value } };
+    case "ADD_TASK_AND_BLOCKS":
+      return {
+        ...state,
+        tasks: [...state.tasks, action.task],
+        blocks: [...state.blocks, ...action.blocks],
+      };
+    case "UPDATE_BLOCK":
+      return {
+        ...state,
+        blocks: state.blocks.map((block) =>
+          block.id === action.block.id ? action.block : block,
+        ),
+      };
     default:
       return state;
   }
