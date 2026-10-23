@@ -56,6 +56,10 @@ import {
 } from "../services/reminderService.js";
 import { weeklyReport } from "../services/reportService.js";
 
+const notPast = (user, date, what = "deadline") => {
+  if (date && date < today(user.timezone))
+    fail(`The ${what} cannot be before today`);
+};
 const send = (res, data, status = 200) => res.status(status).json({ data });
 const own = async (Model, req, id = req.params.id) => {
   const result = await Model.findOne({ _id: id, userId: req.user._id });
@@ -200,6 +204,8 @@ export const getTask = async (req, res) => {
 };
 export const createTask = async (req, res) => {
   const b = parse(taskFields.extend(placementFields.partial().shape), req.body);
+  notPast(req.user, b.deadlineDate);
+  notPast(req.user, b.goalEndDate, "goal end date");
   const {
     placementMode,
     flexibleDate,
@@ -257,6 +263,9 @@ export const updateTask = async (req, res) => {
     });
     if (outside) fail("The goal period must include its saved session history");
   }
+  if (b.deadlineDate !== task.deadlineDate) notPast(user, b.deadlineDate);
+  if (b.goalEndDate !== task.goalEndDate)
+    notPast(user, b.goalEndDate, "goal end date");
   if (
     b.durationMinutes !== undefined &&
     b.durationMinutes !== task.durationMinutes &&
@@ -669,6 +678,8 @@ export const editDraft = async (req, res) => {
   );
   const c = await own(Conversation, req);
   if (c.status !== "draft") fail("This plan is already confirmed", 409);
+  notPast(req.user, b.updates.deadlineDate);
+  notPast(req.user, b.updates.goalEndDate, "goal end date");
   const updated = await Conversation.findOneAndUpdate(
     {
       _id: c._id,

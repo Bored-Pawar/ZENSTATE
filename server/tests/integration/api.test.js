@@ -2650,3 +2650,30 @@ suite(
     );
   },
 );
+
+suite("tasks reject a deadline before today", async () => {
+  const yesterday = DateTime.now().setZone("UTC").minus({ days: 1 }).toISODate();
+  const task = { title: "Deadline check", durationMinutes: 30 };
+  assert.equal(
+    (await call(a, "post", "/tasks", { ...task, deadlineDate: yesterday })).status,
+    400,
+  );
+  const created = ok(
+    await call(a, "post", "/tasks", { ...task, deadlineDate: tomorrow }),
+    201,
+  );
+  assert.equal(
+    (await call(a, "patch", `/tasks/${created.id}`, { deadlineDate: yesterday })).status,
+    400,
+  );
+  const earlier = DateTime.now().setZone("UTC").minus({ days: 3 }).toISODate();
+  const goal = await call(a, "post", "/tasks", {
+    ...task,
+    taskType: "multi_day",
+    goalStartDate: earlier,
+    goalEndDate: yesterday,
+  });
+  assert.equal(goal.status, 400, JSON.stringify(goal.body));
+  // Re-sending an unchanged deadline or editing other fields stays allowed.
+  ok(await call(a, "patch", `/tasks/${created.id}`, { deadlineDate: tomorrow }));
+});

@@ -30,6 +30,7 @@ export default function Timetable({ setup = false }) {
   const [week, setWeek] = useState(() => weekStart(zone)),
     [blocks, setBlocks] = useState([]),
     [error, setError] = useState(""),
+    [loadError, setLoadError] = useState(""),
     [busy, setBusy] = useState(false),
     [loaded, setLoaded] = useState(false);
   const [form, setForm] = useState(null),
@@ -47,11 +48,11 @@ export default function Timetable({ setup = false }) {
         if (active) {
           setBlocks(b);
           setLoaded(true);
-          setError("");
+          setLoadError("");
         }
       })
       .catch((e) => {
-        if (active) setError(e.message);
+        if (active) setLoadError(e.message);
       });
     return () => {
       active = false;
@@ -215,9 +216,9 @@ export default function Timetable({ setup = false }) {
             : "No flexible reservations for these dates."}
         </p>
       </section>
-      {error && !form && (
+      {(error || loadError) && !form && (
         <p className="error" role="alert">
-          {error}
+          {error || loadError}
         </p>
       )}
       {!loaded && <p>Loading timetable…</p>}
