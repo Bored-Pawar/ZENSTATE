@@ -24,6 +24,7 @@ try {
       "isolated-browser-test-secret-01234567890123456789";
     process.env.CLIENT_ORIGIN = "http://127.0.0.1:5173";
     delete process.env.AI_API_KEY;
+    delete process.env.AI_API_KEYS;
     const { app } = await import("../src/app.js");
     server = app.listen(5001, "127.0.0.1", () =>
       console.log("TEST_BACKEND_READY http://127.0.0.1:5001"),
