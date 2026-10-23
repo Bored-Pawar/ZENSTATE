@@ -1,7 +1,9 @@
+import { retiredSession } from "../utils/sessions.js";
 import { Task, ScheduleBlock } from "../models/index.js";
 import { fail } from "../utils/validation.js";
 export function reminderEligible(record, now = Date.now()) {
   if (
+    retiredSession(record) ||
     record.status === "completed" ||
     record.status === "cancelled" ||
     record.status === "held"
@@ -89,7 +91,11 @@ export async function claimReminder(userId, id) {
 export async function snoozeReminder(userId, id) {
   const t = target(id);
   const record = await t.model.findOne({ _id: t.id, userId });
-  if (!record || ["completed", "cancelled", "held"].includes(record.status))
+  if (
+    !record ||
+    retiredSession(record) ||
+    ["completed", "cancelled", "held"].includes(record.status)
+  )
     fail("Reminder is no longer active", 409);
   if (!["delivered", "snoozed"].includes(record.reminderStatus))
     fail("Only a delivered reminder can be snoozed", 409);
@@ -116,8 +122,12 @@ export async function reminderState(userId, id) {
       ? record
       : await Task.findOne({ _id: record.taskId, userId }).lean();
   return {
+    startAt: record.startAt || record.flexibleReminderAt || null,
     active: Boolean(
       task &&
+        (t.type !== "task" ||
+          (task.placementMode === "flexible" && task.flexibleReminderAt)) &&
+        !retiredSession(record) &&
         record.reminderStatus !== "cancelled" &&
         !["completed", "held"].includes(task.status) &&
         !["completed", "cancelled", "held"].includes(record.status),

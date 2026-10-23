@@ -34,6 +34,7 @@ export default function DisciplineReport() {
       </p>
     );
   const max = Math.max(1, ...report.daily.map((d) => d.completedMinutes));
+  const hasSessionData = report.plannedSessions > 0;
   return (
     <div>
       <div className="toolbar">
@@ -54,19 +55,40 @@ export default function DisciplineReport() {
         <div>
           <p className="eyebrow">YOUR WEEK IN REVIEW</p>
           <h2>Progress is a pattern, not a verdict.</h2>
-          <p>
-            {report.completedSessions} completed · {report.missedSessions}{" "}
-            missed · {report.upcomingSessions} upcoming or active sessions.
-          </p>
-          <p>
-            {report.completedMinutes} / {report.plannedMinutes} planned minutes
-            completed. {report.completedTasks} tasks completed this week.
-          </p>
+          <h3>
+            {report.completedTasks}{" "}
+            {report.completedTasks === 1 ? "task" : "tasks"} completed this week
+          </h3>
+          {hasSessionData && (
+            <>
+              <p>
+                {report.completedSessions} completed · {report.missedSessions}{" "}
+                missed · {report.upcomingSessions} upcoming or active sessions.
+              </p>
+              <p>
+                {report.completedMinutes} / {report.plannedMinutes} planned
+                minutes completed.
+              </p>
+            </>
+          )}
+          {report.rescheduledSessions > 0 && (
+            <p className="hint">
+              {report.rescheduledSessions} rescheduled occurrences retained (
+              {report.historicalMissedSessions} previously missed). These
+              history records are excluded from current planned effort.
+            </p>
+          )}
           <CoachButton text={report.coachText} />
         </div>
         <div className="report-score">
-          <strong>{report.completionPercent}%</strong>
-          <span>session completion</span>
+          {hasSessionData ? (
+            <>
+              <strong>{report.completionPercent}%</strong>
+              <span>session completion</span>
+            </>
+          ) : (
+            <span>No session data</span>
+          )}
         </div>
       </section>
       <div className="report-grid">

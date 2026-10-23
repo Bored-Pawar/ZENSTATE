@@ -27,11 +27,12 @@ export default function PlannerAvailability() {
     setBusy(true);
     setError("");
     try {
-      await conversationAction(
+      const saved = await conversationAction(
         `/planner/conversations/${c.id}/draft`,
         { draftVersion: c.draftVersion, updates: p },
         "PATCH",
       );
+      if (!saved) return;
       navigate(path("/planner/confirmation"));
     } catch (e) {
       setError(e.message);

@@ -30,6 +30,8 @@ export default function Today() {
     (b) =>
       b.recordType === "session" &&
       b.status !== "cancelled" &&
+      !b.rescheduledToSessionId &&
+      b.cancelReason !== "rescheduled" &&
       DateTime.fromISO(b.startAt, { zone }).toISODate() === today,
   );
   const tasks = state.tasks.filter((t) =>

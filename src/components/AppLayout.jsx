@@ -21,7 +21,8 @@ export default function AppLayout() {
     [reminderError, setReminderError] = useState("");
   const activeRef = useRef(null),
     checking = useRef(false),
-    queue = useRef([]);
+    queue = useRef([]),
+    checkRef = useRef(null);
   useEffect(() => {
     const timer = setInterval(() => setClock(DateTime.now()), 30000);
     return () => clearInterval(timer);
@@ -35,7 +36,13 @@ export default function AppLayout() {
         if (activeRef.current) {
           try {
             const valid = await api(`/reminders/${activeRef.current.id}`);
-            if (!valid.active) {
+            if (cancelled) return;
+            if (
+              !valid.active ||
+              (valid.startAt &&
+                +new Date(valid.startAt) !==
+                  +new Date(activeRef.current?.startAt))
+            ) {
               activeRef.current = null;
               if (!cancelled) setActive(null);
             }
@@ -47,6 +54,7 @@ export default function AppLayout() {
           }
         }
         const due = await api("/reminders/due");
+        if (cancelled) return;
         const dueIds = new Set(due.map((reminder) => reminder.id));
         queue.current = queue.current.filter((reminder) =>
           dueIds.has(reminder.id),
@@ -81,6 +89,7 @@ export default function AppLayout() {
         checking.current = false;
       }
     };
+    checkRef.current = check;
     check();
     const timer = setInterval(check, 12000);
     window.addEventListener("focus", check);
@@ -90,8 +99,38 @@ export default function AppLayout() {
       clearInterval(timer);
       window.removeEventListener("focus", check);
       document.removeEventListener("visibilitychange", check);
-      window.speechSynthesis?.cancel();
+      checkRef.current = null;
     };
+  }, [state.user.id]);
+  useEffect(() => {
+    // Cached mutations can invalidate the current popup immediately, even if
+    // a due-check request is still in flight. Ordinary refresh leaves it alone.
+    const valid = (reminder) => {
+      const task = state.tasks.find((t) => t.id === reminder.taskId);
+      if (!task || ["completed", "held"].includes(task.status)) return false;
+      if (!reminder.id.startsWith("session:"))
+        return (
+          task.placementMode === "flexible" &&
+          task.reminderStatus !== "cancelled" &&
+          +new Date(task.flexibleReminderAt) === +new Date(reminder.startAt)
+        );
+      const block = state.blocks.find((b) => b.id === reminder.id.slice(8));
+      return (
+        !block ||
+        (!block.rescheduledToSessionId &&
+          !block.cancelReason &&
+          block.status !== "cancelled" &&
+          block.status !== "completed" &&
+          +new Date(block.startAt) === +new Date(reminder.startAt) &&
+          block.reminderStatus !== "cancelled")
+      );
+    };
+    queue.current = queue.current.filter(valid);
+    if (activeRef.current && !valid(activeRef.current)) {
+      activeRef.current = null;
+      setActive(null);
+    }
+    void checkRef.current?.();
   }, [state.tasks, state.blocks]);
   useEffect(
     () => () => {

@@ -1,3 +1,4 @@
+import { retiredSession, withRescheduleHistory } from "../utils/sessions.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
@@ -154,11 +155,12 @@ export const listTasks = async (req, res) => {
   const tasks = await Task.find({ userId: req.user._id }).sort({
     createdAt: -1,
   });
-  const sessions = await ScheduleBlock.find({
-    userId: req.user._id,
-    recordType: "session",
-    status: { $ne: "cancelled" },
-  }).lean();
+  const sessions = withRescheduleHistory(
+    await ScheduleBlock.find({
+      userId: req.user._id,
+      recordType: "session",
+    }).lean(),
+  );
   send(
     res,
     tasks.map((t) => ({
@@ -166,7 +168,9 @@ export const listTasks = async (req, res) => {
       sessionDates: [
         ...new Set(
           sessions
-            .filter((s) => String(s.taskId) === String(t._id))
+            .filter(
+              (s) => String(s.taskId) === String(t._id) && !retiredSession(s),
+            )
             .map((s) =>
               DateTime.fromJSDate(s.startAt, {
                 zone: req.user.timezone,
@@ -188,7 +192,10 @@ export const getTask = async (req, res) => {
     userId: req.user._id,
     taskId: task._id,
   }).sort({ startAt: 1 });
-  send(res, { ...task.toJSON(), sessions });
+  send(res, {
+    ...task.toJSON(),
+    sessions: withRescheduleHistory(sessions.map((s) => s.toJSON())),
+  });
 };
 export const createTask = async (req, res) => {
   const b = parse(taskFields.extend(placementFields.partial().shape), req.body);
@@ -249,8 +256,11 @@ export const updateTask = async (req, res) => {
     if (late || (task.flexibleDate && task.flexibleDate > b.deadlineDate))
       fail("Existing placement is after this deadline");
   }
+  const changed = Object.keys(b).filter(
+    (key) => String(task[key] ?? "") !== String(b[key] ?? ""),
+  );
   Object.assign(task, b);
-  await task.save();
+  if (changed.length) await task.save();
   if (b.title) {
     try {
       await ScheduleBlock.updateMany(
@@ -266,7 +276,18 @@ export const updateTask = async (req, res) => {
       );
     }
   }
-  await invalidateContext(req.user._id, task._id);
+  if (
+    changed.some((key) =>
+      [
+        "title",
+        "goal",
+        "motivation",
+        "planningPreferences",
+        "durationMinutes",
+      ].includes(key),
+    )
+  )
+    await invalidateContext(req.user._id, task._id, { preserveMessage: true });
   send(res, await Task.findById(task._id));
 };
 export const deleteTask = async (req, res) => {
@@ -299,7 +320,8 @@ export const deleteTask = async (req, res) => {
 };
 export const placement = async (req, res) => {
   const t = await placeTask(req.user._id, req.params.id, req.body);
-  await invalidateContext(req.user._id, t._id);
+  if (t.$locals.placementChanged !== false)
+    await invalidateContext(req.user._id, t._id);
   send(res, await Task.findById(t._id));
 };
 // Completion is a saved fact. Retrying also finishes pending-session cleanup.
@@ -317,10 +339,17 @@ export const completeTask = async (req, res) => {
 async function cancelRemaining(userId, taskId) {
   try {
     await ScheduleBlock.updateMany(
-      { userId, taskId, status: "pending" },
+      {
+        userId,
+        taskId,
+        status: "pending",
+        rescheduledToSessionId: { $exists: false },
+        cancelReason: { $ne: "rescheduled" },
+      },
       {
         $set: {
           status: "cancelled",
+          cancelReason: "task_completed_early",
           reminderStatus: "cancelled",
           snoozedUntil: null,
         },
@@ -356,19 +385,19 @@ export const schedule = async (req, res) => {
   const from = parse(dateOnly, req.query.weekStart),
     end = plusDays(from, 7);
   await markMissed(req.user._id);
+  const blocks = withRescheduleHistory(
+    (await ScheduleBlock.find({ userId: req.user._id })).map((block) =>
+      block.toJSON(),
+    ),
+  );
   send(
     res,
-    await ScheduleBlock.find({
-      userId: req.user._id,
-      $or: [
-        { recordType: "recurring" },
-        {
-          recordType: "session",
-          startAt: { $lt: day(end, req.user.timezone).toJSDate() },
-          endAt: { $gt: day(from, req.user.timezone).toJSDate() },
-        },
-      ],
-    }),
+    blocks.filter(
+      (b) =>
+        b.recordType === "recurring" ||
+        (+b.startAt < day(end, req.user.timezone).toMillis() &&
+          +b.endAt > day(from, req.user.timezone).toMillis()),
+    ),
   );
 };
 export const addBlock = async (req, res) =>
@@ -425,7 +454,7 @@ export const splitBlock = async (req, res) => {
 };
 export const completeSession = async (req, res) => {
   const block = await own(ScheduleBlock, req);
-  if (block.recordType !== "session" || block.status === "cancelled")
+  if (block.recordType !== "session" || retiredSession(block))
     fail("Session cannot be completed");
   if (+block.startAt > Date.now())
     fail("Complete this session after it has started");
@@ -695,6 +724,7 @@ export const reschedule = async (req, res) => {
     p.sessions = [slot];
   }
   const t = await placeTask(req.user._id, task._id, p);
-  await invalidateContext(req.user._id, t._id);
+  if (t.$locals.placementChanged !== false)
+    await invalidateContext(req.user._id, t._id);
   send(res, t);
 };

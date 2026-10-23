@@ -1,23 +1,26 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { usePlanning } from "../services/usePlanning";
 import { formatInstant } from "../services/dates";
 export default function PlannerConfirmation() {
-  const { state, act, loadConversation, zone, error, setError, loading, path } =
+  const { state, act, clearActivePlan, zone, error, setError, loading, path } =
       usePlanning(),
     [busy, setBusy] = useState(false),
     [saved, setSaved] = useState(null);
+  const submitting = useRef(false);
   const c = state.conversation;
-  if (!c)
+  if (!c && !saved)
     return (
       <p>
         {loading ? "Restoring plan…" : error || "Start a plan first."}{" "}
         <Link to="/planner">Planner</Link>
       </p>
     );
-  const d = c.draft,
-    taskId = saved?.id || c.confirmedTaskId;
+  const d = saved?.draft || c.draft,
+    taskId = saved?.task.id || c.confirmedTaskId;
   const confirm = async () => {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
@@ -25,12 +28,13 @@ export default function PlannerConfirmation() {
         draftVersion: c.draftVersion,
       });
       if (task) {
-        setSaved(task);
-        await loadConversation(c.id);
+        setSaved({ task, draft: c.draft });
+        clearActivePlan();
       }
     } catch (e) {
       setError(e.message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   };
@@ -66,8 +70,8 @@ export default function PlannerConfirmation() {
         </div>
       </article>
       <p className="hint">
-        Confirmation checks your latest timetable again and atomically saves the
-        task and sessions. Repeating confirmation returns the same task.
+        Confirmation checks your latest timetable again and saves the task and
+        sessions. Repeating confirmation returns the same task.
       </p>
       {error && (
         <p className="error" role="alert">

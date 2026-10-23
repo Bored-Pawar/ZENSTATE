@@ -36,6 +36,96 @@ const ok = (response, status = 200) => {
   assert.equal(response.status, status, JSON.stringify(response.body));
   return response.body.data;
 };
+suite(
+  "REPORT: direct task completion, cancelled sessions, and completed session effort stay distinct",
+  async () => {
+    const u = ok(
+      await request(app).post("/api/auth/register").send({
+        name: "Report Student",
+        email: "report-states@test.example",
+        password: "password123",
+        timezone: "UTC",
+      }),
+      201,
+    );
+    const start = DateTime.now().toUTC().startOf("week");
+    const getReport = async () =>
+      ok(
+        await call(
+          u.token,
+          "get",
+          `/reports/weekly?weekStart=${start.toISODate()}`,
+        ),
+      );
+    const empty = await getReport();
+    assert.equal(empty.completedTasks, 0);
+    assert.equal(empty.plannedSessions, 0);
+    assert.match(empty.coachText, /No tasks completed and no session data/);
+    const tasks = [];
+    for (let i = 0; i < 2; i++) {
+      const task = ok(
+        await call(u.token, "post", "/tasks", {
+          title: `Direct completion ${i}`,
+          durationMinutes: 60,
+        }),
+        201,
+      );
+      tasks.push(task);
+      ok(await call(u.token, "post", `/tasks/${task.id}/complete`, {}));
+    }
+    const direct = await getReport();
+    assert.equal(direct.completedTasks, 2);
+    assert.equal(direct.plannedSessions, 0);
+    assert.equal(direct.completedMinutes, 0);
+    assert.match(direct.coachText, /You completed 2 tasks this week/);
+    assert.equal(await ScheduleBlock.countDocuments({ userId: u.user.id }), 0);
+    const common = { userId: u.user.id, recordType: "session", kind: "task" };
+    const cancelled = await ScheduleBlock.create({
+      ...common,
+      taskId: tasks[0].id,
+      title: tasks[0].title,
+      startAt: start.toJSDate(),
+      endAt: start.plus({ minutes: 60 }).toJSDate(),
+      status: "cancelled",
+      cancelReason: "task_completed_early",
+    });
+    assert.equal((await getReport()).plannedSessions, 0);
+    const task = ok(
+      await call(u.token, "post", "/tasks", {
+        title: "Actual session completion",
+        durationMinutes: 30,
+      }),
+      201,
+    );
+    const session = await ScheduleBlock.create({
+      ...common,
+      taskId: task.id,
+      title: task.title,
+      startAt: start.toJSDate(),
+      endAt: start.plus({ minutes: 30 }).toJSDate(),
+      status: "pending",
+    });
+    ok(
+      await call(
+        u.token,
+        "post",
+        `/schedule/sessions/${session.id}/complete`,
+        {},
+      ),
+    );
+    const completed = await getReport();
+    assert.equal(completed.completedTasks, 3);
+    assert.equal(completed.plannedSessions, 1);
+    assert.equal(completed.completedSessions, 1);
+    assert.equal(completed.plannedMinutes, 30);
+    assert.equal(completed.completedMinutes, 30);
+    assert.equal(completed.completionPercent, 100);
+    assert.equal(
+      (await ScheduleBlock.findById(cancelled.id)).status,
+      "cancelled",
+    );
+  },
+);
 before(async () => {
   if (!uri) return;
   const database = new URL(uri).pathname.slice(1);
@@ -213,7 +303,9 @@ suite(
     const report = ok(
       await call(b, "get", `/reports/weekly?weekStart=${oldWeek}`),
     );
-    assert.ok(report.missedSessions >= 1);
+    assert.ok(report.historicalMissedSessions >= 1);
+    assert.ok(report.rescheduledSessions >= 1);
+    assert.ok((await ScheduleBlock.findById(old.id)).rescheduledToSessionId);
   },
 );
 suite(
@@ -675,6 +767,7 @@ suite(
   async () => {
     let mode = "valid",
       captured;
+    const providerRequests = [];
     let releaseOld, notifyOld;
     const oldStarted = new Promise((resolve) => {
       notifyOld = resolve;
@@ -686,6 +779,7 @@ suite(
       let raw = "";
       for await (const c of req) raw += c;
       captured = JSON.parse(raw);
+      providerRequests.push(captured);
       res.setHeader("Content-Type", "application/json");
       if (mode === "context") {
         const source = JSON.parse(captured.messages.at(-1).content);
@@ -756,7 +850,9 @@ suite(
     );
     assert.equal(result.conversation.draft.durationMinutes, 90);
     assert.equal(
-      captured.messages.filter((m) => m.content === input.content).length,
+      providerRequests
+        .findLast((r) => r.messages.at(-1).content === input.content)
+        .messages.filter((m) => m.content === input.content).length,
       1,
     );
     const corrected = ok(
@@ -782,7 +878,13 @@ suite(
     assert.equal(await Task.countDocuments({ sourceConversationId: c.id }), 1);
     assert.ok(reflection.planningTask.contextVersion >= 2);
     assert.ok(
-      captured.messages.some((m) => m.content.includes("importantContext")),
+      providerRequests
+        .findLast(
+          (r) =>
+            r.messages.at(-1).content ===
+            "Cleanup is still difficult; I prefer one small example.",
+        )
+        .messages.some((m) => m.content.includes("importantContext")),
     );
     mode = "malformed";
     assert.equal(
@@ -1611,5 +1713,557 @@ suite(
       }
       await new Promise((r) => server.close(r));
     }
+  },
+);
+
+suite(
+  "STABILITY: metadata/no-op edits preserve task placement, prepared message, notes and completion state",
+  async () => {
+    const t = ok(
+      await call(recoveryToken, "post", "/tasks", {
+        title: "Metadata stability",
+        motivation: "Keep this reason",
+        durationMinutes: 30,
+      }),
+      201,
+    );
+    const n = ok(
+      await call(recoveryToken, "post", "/notes", {
+        taskId: t.id,
+        text: "Keep this note",
+      }),
+      201,
+    );
+    await new Promise((r) => setTimeout(r, 350));
+    await Task.updateOne(
+      { _id: t.id },
+      {
+        $set: {
+          motivationalMessage: "Prepared message stays available",
+          messageStatus: "ready",
+        },
+      },
+    );
+    const before = await Task.findById(t.id);
+    for (const body of [
+      { priority: "high" },
+      { priority: "high" },
+      { category: "Lab", journalEnabled: false },
+    ]) {
+      const saved = ok(
+        await call(recoveryToken, "patch", `/tasks/${t.id}`, body),
+      );
+      assert.equal(saved.id, t.id);
+      assert.equal(saved.placementMode, "held");
+      assert.equal(saved.status, "held");
+      assert.equal(
+        saved.motivationalMessage,
+        "Prepared message stays available",
+      );
+      assert.equal(saved.contextVersion, before.contextVersion);
+    }
+    const renamed = ok(
+      await call(recoveryToken, "patch", `/tasks/${t.id}`, {
+        title: "Renamed metadata stability",
+      }),
+    );
+    assert.equal(
+      renamed.motivationalMessage,
+      "Prepared message stays available",
+    );
+    assert.equal(await Note.countDocuments({ _id: n.id, taskId: t.id }), 1);
+    assert.equal(await Task.countDocuments({ _id: t.id }), 1);
+    assert.equal(
+      (
+        await call(recoveryToken, "patch", `/tasks/${t.id}`, {
+          status: "completed",
+        })
+      ).status,
+      400,
+    );
+  },
+);
+suite(
+  "STABILITY: upcoming move keeps ID, duration and reminder retry state; errors leave placement intact",
+  async () => {
+    const user = ok(
+      await request(app).post("/api/auth/register").send({
+        name: "Move checks",
+        email: "move-stability@test.example",
+        password: "password123",
+        timezone: "UTC",
+      }),
+      201,
+    );
+    const token = user.token,
+      uid = user.user.id;
+    const t = ok(
+      await call(token, "post", "/tasks", {
+        title: "Future move",
+        durationMinutes: 60,
+        placementMode: "scheduled",
+        sessions: [{ startAt: at(9), endAt: at(10) }],
+      }),
+      201,
+    );
+    const old = await ScheduleBlock.findOne({ taskId: t.id });
+    await ScheduleBlock.updateOne(
+      { _id: old._id },
+      { $set: { reminderStatus: "delivered", snoozedUntil: new Date() } },
+    );
+    const move = { startAt: at(11), endAt: at(12) };
+    const moved = ok(
+      await call(token, "patch", `/schedule/blocks/${old.id}`, move),
+    )[0];
+    assert.equal(moved.id, old.id);
+    assert.equal(
+      ok(await call(token, "get", `/reminders/session:${old.id}`)).startAt,
+      move.startAt,
+    );
+    assert.equal(moved.reminderStatus, "pending");
+    assert.equal(moved.snoozedUntil, null);
+    await ScheduleBlock.updateOne(
+      { _id: old._id },
+      { $set: { reminderStatus: "delivered" } },
+    );
+    assert.equal(
+      ok(await call(token, "patch", `/schedule/blocks/${old.id}`, move))[0]
+        .reminderStatus,
+      "delivered",
+    );
+    assert.equal(await ScheduleBlock.countDocuments({ taskId: t.id }), 1);
+    for (const [body, code] of [
+      [{ startAt: at(11), endAt: at(13) }, "INVALID_DURATION"],
+      [
+        {
+          startAt: new Date(Date.now() - 7200000).toISOString(),
+          endAt: new Date(Date.now() - 3600000).toISOString(),
+        },
+        "PAST_TIME",
+      ],
+    ]) {
+      const r = await call(token, "patch", `/schedule/blocks/${old.id}`, body);
+      assert.equal(r.body.error.code, code);
+    }
+    ok(
+      await call(token, "post", "/schedule/blocks", {
+        title: "Commitment",
+        kind: "fixed",
+        weekday: DateTime.fromISO(tomorrow).weekday,
+        startMinute: 780,
+        endMinute: 840,
+      }),
+      201,
+    );
+    assert.equal(
+      (
+        await call(token, "patch", `/schedule/blocks/${old.id}`, {
+          startAt: at(13),
+          endAt: at(14),
+        })
+      ).body.error.code,
+      "SCHEDULE_CONFLICT",
+    );
+    await Task.updateOne({ _id: t.id }, { $set: { deadlineDate: tomorrow } });
+    const later = DateTime.fromISO(tomorrow).plus({ days: 1 }).toISODate();
+    assert.equal(
+      (
+        await call(token, "patch", `/schedule/blocks/${old.id}`, {
+          startAt: at(11, later),
+          endAt: at(12, later),
+        })
+      ).body.error.code,
+      "DEADLINE_VIOLATION",
+    );
+    assert.equal(
+      +(await ScheduleBlock.findById(old.id)).startAt,
+      +new Date(move.startAt),
+    );
+    assert.equal(
+      (
+        await call(token, "post", `/schedule/blocks/${old.id}/split`, {
+          splitAt: at(12),
+        })
+      ).body.error.code,
+      "INVALID_SPLIT",
+    );
+    const split = ok(
+      await call(token, "post", `/schedule/blocks/${old.id}/split`, {
+        splitAt: at(11).replace("11:00", "11:30"),
+      }),
+    );
+    assert.equal(
+      split.reduce(
+        (n, s) => n + (Date.parse(s.endAt) - Date.parse(s.startAt)) / 60000,
+        0,
+      ),
+      60,
+    );
+    assert.ok(
+      split.every((s) => s.taskId === t.id && s.reminderStatus === "pending"),
+    );
+  },
+);
+suite(
+  "STABILITY: started/missed reschedule retains history and completed effort; repeated requests make one replacement",
+  async () => {
+    const user = ok(
+      await request(app).post("/api/auth/register").send({
+        name: "History checks",
+        email: "history-stability@test.example",
+        password: "password123",
+        timezone: "UTC",
+      }),
+      201,
+    );
+    for (const missed of [false, true]) {
+      const t = ok(
+        await call(user.token, "post", "/tasks", {
+          title: missed ? "Missed move" : "Started move",
+          motivation: "Keep motivation",
+          durationMinutes: 60,
+        }),
+        201,
+      );
+      await Task.updateOne(
+        { _id: t.id },
+        { $set: { placementMode: "scheduled", status: "in_progress" } },
+      );
+      await ScheduleBlock.create({
+        userId: user.user.id,
+        taskId: t.id,
+        recordType: "session",
+        kind: "task",
+        title: t.title,
+        startAt: new Date(Date.now() - 7200000),
+        endAt: new Date(Date.now() - 5400000),
+        status: "completed",
+      });
+      const source = await ScheduleBlock.create({
+        userId: user.user.id,
+        taskId: t.id,
+        recordType: "session",
+        kind: "task",
+        title: t.title,
+        startAt: new Date(Date.now() - (missed ? 3600000 : 60000)),
+        endAt: new Date(Date.now() + (missed ? -1800000 : 1740000)),
+        status: missed ? "missed" : "pending",
+        reminderStatus: "snoozed",
+        snoozedUntil: new Date(),
+      });
+      const note = ok(
+        await call(user.token, "post", "/notes", {
+          taskId: t.id,
+          text: "Preserved task note",
+        }),
+        201,
+      );
+      await new Promise((r) => setTimeout(r, 350));
+      const before = await Task.findById(t.id);
+      const hour = missed ? 16 : 14;
+      const body = {
+        startAt: at(hour),
+        endAt: at(hour).replace(":00:", ":30:"),
+      };
+      const responses = await Promise.all([
+        call(user.token, "patch", `/schedule/blocks/${source.id}`, body),
+        call(user.token, "patch", `/schedule/blocks/${source.id}`, body),
+      ]);
+      const first = ok(responses[0])[0],
+        second = ok(responses[1])[0];
+      assert.equal(first.id, second.id);
+      const original = await ScheduleBlock.findById(source.id);
+      assert.equal(original.status, missed ? "missed" : "pending");
+      assert.equal(String(original.rescheduledToSessionId), first.id);
+      assert.equal(original.reminderStatus, "cancelled");
+      assert.equal(first.supersedesSessionId, source.id);
+      assert.equal(
+        await ScheduleBlock.countDocuments({ rescheduleSourceId: source.id }),
+        1,
+      );
+      assert.equal(
+        ok(await call(user.token, "get", `/reminders/session:${source.id}`))
+          .active,
+        false,
+      );
+      assert.equal(
+        (
+          await call(
+            user.token,
+            "post",
+            `/schedule/sessions/${source.id}/complete`,
+            {},
+          )
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await call(
+            user.token,
+            "post",
+            `/schedule/blocks/${source.id}/split`,
+            { splitAt: source.endAt.toISOString() },
+          )
+        ).status,
+        409,
+      );
+      const after = await Task.findById(t.id);
+      assert.equal(after.contextVersion, before.contextVersion);
+      assert.equal(after.motivation, before.motivation);
+      assert.equal(after.status, "in_progress");
+      assert.ok(await Note.exists({ _id: note.id, taskId: t.id }));
+      const listed = ok(await call(user.token, "get", "/tasks")).find(
+        (x) => x.id === t.id,
+      );
+      assert.equal(listed.completedPlannedMinutes, 30);
+      const schedule = ok(
+        await call(
+          user.token,
+          "get",
+          `/schedule?weekStart=${DateTime.now().setZone("UTC").startOf("week").toISODate()}`,
+        ),
+      );
+      assert.ok(schedule.some((s) => s.id === source.id));
+    }
+  },
+);
+suite(
+  "STABILITY: interrupted reschedule link is repairable, and early completion retains cancelled calendar records",
+  async () => {
+    const t = ok(
+      await call(recoveryToken, "post", "/tasks", {
+        title: "Link retry",
+        durationMinutes: 30,
+      }),
+      201,
+    );
+    await Task.updateOne(
+      { _id: t.id },
+      { $set: { placementMode: "scheduled", status: "pending" } },
+    );
+    const source = await ScheduleBlock.create({
+      userId: recoveryUser,
+      taskId: t.id,
+      recordType: "session",
+      kind: "task",
+      title: t.title,
+      startAt: new Date(Date.now() - 3600000),
+      endAt: new Date(Date.now() - 1800000),
+      status: "missed",
+    });
+    const move = { startAt: at(18), endAt: at(18).replace("18:00", "18:30") };
+    await faultOnce(
+      ScheduleBlock,
+      "updateOne",
+      (filter, update) => !!update.$set?.rescheduledToSessionId,
+      async () => {
+        const r = await call(
+          recoveryToken,
+          "patch",
+          `/schedule/blocks/${source.id}`,
+          move,
+        );
+        assert.equal(r.status, 503);
+        assert.equal(r.body.error.code, "RESCHEDULE_SAVED");
+      },
+    );
+    const result = ok(
+      await call(recoveryToken, "patch", `/schedule/blocks/${source.id}`, move),
+    )[0];
+    assert.equal(
+      await ScheduleBlock.countDocuments({ rescheduleSourceId: source.id }),
+      1,
+    );
+    ok(await call(recoveryToken, "post", `/tasks/${t.id}/complete`, {}));
+    const replacement = await ScheduleBlock.findById(result.id);
+    assert.equal(replacement.status, "cancelled");
+    assert.equal(replacement.cancelReason, "task_completed_early");
+    const week = DateTime.fromISO(tomorrow).startOf("week").toISODate();
+    const blocks = ok(
+      await call(recoveryToken, "get", `/schedule?weekStart=${week}`),
+    );
+    assert.ok(
+      blocks.some((s) => s.id === result.id && s.status === "cancelled"),
+    );
+    assert.equal(
+      ok(await call(recoveryToken, "get", `/reminders/session:${result.id}`))
+        .active,
+      false,
+    );
+    assert.equal(
+      (
+        await call(
+          recoveryToken,
+          "patch",
+          `/schedule/blocks/${result.id}`,
+          move,
+        )
+      ).status,
+      409,
+    );
+  },
+);
+suite(
+  "STABILITY: confirmed drafts stay read-only while repeated/lost-response confirmation returns saved task",
+  async () => {
+    const c = ok(
+      await call(recoveryToken, "post", "/planner/conversations", {}),
+      201,
+    ).conversation;
+    const draft = ok(
+      await call(
+        recoveryToken,
+        "patch",
+        `/planner/conversations/${c.id}/draft`,
+        {
+          draftVersion: 0,
+          updates: {
+            goal: "Lifecycle check",
+            motivation: "One task only",
+            durationMinutes: 30,
+            placementMode: "held",
+          },
+        },
+      ),
+    ).conversation;
+    const original = ok(
+      await call(
+        recoveryToken,
+        "post",
+        `/planner/conversations/${c.id}/confirm`,
+        { draftVersion: draft.draftVersion },
+      ),
+    );
+    const retry = ok(
+      await call(
+        recoveryToken,
+        "post",
+        `/planner/conversations/${c.id}/confirm`,
+        { draftVersion: 0 },
+      ),
+    );
+    assert.equal(retry.id, original.id);
+    assert.equal(
+      (
+        await call(
+          recoveryToken,
+          "patch",
+          `/planner/conversations/${c.id}/draft`,
+          {
+            draftVersion: draft.draftVersion,
+            updates: { goal: "Must not become another task" },
+          },
+        )
+      ).status,
+      409,
+    );
+    assert.equal(await Task.countDocuments({ sourceConversationId: c.id }), 1);
+    const saved = ok(
+      await call(recoveryToken, "get", `/planner/conversations/${c.id}`),
+    );
+    assert.equal(saved.planningTask.id, original.id);
+  },
+);
+
+suite(
+  "STABILITY: legacy replacement links are recognised across weeks without rewriting saved history",
+  async () => {
+    const u = ok(
+      await request(app).post("/api/auth/register").send({
+        name: "Legacy history",
+        email: "legacy-history@test.example",
+        password: "password123",
+        timezone: "UTC",
+      }),
+      201,
+    );
+    const t = ok(
+      await call(u.token, "post", "/tasks", {
+        title: "Existing linked history",
+        durationMinutes: 30,
+      }),
+      201,
+    );
+    await Task.updateOne(
+      { _id: t.id },
+      { $set: { placementMode: "scheduled", status: "pending" } },
+    );
+    const oldDate = DateTime.now().toUTC().minus({ days: 8 }).toISODate();
+    const common = {
+      userId: u.user.id,
+      taskId: t.id,
+      recordType: "session",
+      kind: "task",
+      title: t.title,
+    };
+    const source = await ScheduleBlock.create({
+      ...common,
+      startAt: at(9, oldDate),
+      endAt: at(9, oldDate).replace("09:00", "09:30"),
+      status: "missed",
+      reminderStatus: "cancelled",
+    });
+    const replacement = await ScheduleBlock.create({
+      ...common,
+      startAt: at(9),
+      endAt: at(9).replace("09:00", "09:30"),
+      status: "pending",
+      supersedesSessionId: source._id,
+    });
+    const detail = ok(await call(u.token, "get", `/tasks/${t.id}`));
+    assert.equal(
+      String(
+        detail.sessions.find((s) => s.id === source.id).rescheduledToSessionId,
+      ),
+      replacement.id,
+    );
+    const week = DateTime.fromISO(oldDate).startOf("week").toISODate();
+    const report = ok(
+      await call(u.token, "get", `/reports/weekly?weekStart=${week}`),
+    );
+    assert.equal(report.plannedSessions, 0);
+    assert.equal(report.rescheduledSessions, 1);
+    assert.equal(report.historicalMissedSessions, 1);
+    const blocks = ok(
+      await call(u.token, "get", `/schedule?weekStart=${week}`),
+    );
+    assert.equal(
+      String(
+        blocks.find((s) => String(s.id || s._id) === source.id)
+          .rescheduledToSessionId,
+      ),
+      replacement.id,
+    );
+    assert.equal(
+      (await ScheduleBlock.findById(source.id)).rescheduledToSessionId,
+      undefined,
+      "Read compatibility must not migrate documents",
+    );
+    const moved = ok(
+      await call(u.token, "patch", `/schedule/blocks/${source.id}`, {
+        startAt: at(9),
+        endAt: at(9).replace("09:00", "09:30"),
+      }),
+    );
+    assert.equal(moved[0].id, replacement.id);
+    assert.equal(await ScheduleBlock.countDocuments({ taskId: t.id }), 2);
+    const halves = ok(
+      await call(u.token, "post", `/schedule/blocks/${replacement.id}/split`, {
+        splitAt: at(9).replace("09:00", "09:15"),
+      }),
+    );
+    assert.equal(halves[0].id, replacement.id);
+    assert.equal(
+      halves.reduce(
+        (n, s) => n + (Date.parse(s.endAt) - Date.parse(s.startAt)) / 60000,
+        0,
+      ),
+      30,
+    );
+    assert.equal(
+      String((await ScheduleBlock.findById(source.id)).rescheduledToSessionId),
+      replacement.id,
+    );
   },
 );

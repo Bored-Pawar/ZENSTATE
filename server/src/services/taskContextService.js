@@ -21,7 +21,11 @@ export function templateMessage(task, context = "") {
   return `${task.placementMode === "held" ? "When you are ready, make space for" : "It is time to take one manageable step on"} ${task.title}. ${task.motivation ? `This matters because ${task.motivation}. ` : ""}${context ? `Your current note: ${context.slice(0, 220)}. ` : ""}Start with one small part and use your planned time gently. You can record what helped or what felt difficult afterwards.`;
 }
 const pendingTimers = new Map();
-export async function invalidateContext(userId, id) {
+export async function invalidateContext(
+  userId,
+  id,
+  { preserveMessage = false } = {},
+) {
   const task = await Task.findOneAndUpdate(
     { _id: id, userId },
     {
@@ -30,22 +34,23 @@ export async function invalidateContext(userId, id) {
         importantContext: "Refreshing from current saved sources.",
         contextProcessingStatus: "pending",
         messageStatus: "pending",
-        motivationalMessage: "",
+        ...(!preserveMessage ? { motivationalMessage: "" } : {}),
       },
     },
     { new: true },
   );
   if (!task) return;
-  await Task.updateOne(
-    { _id: id, userId, contextVersion: task.contextVersion },
-    {
-      $set: {
-        motivationalMessage: templateMessage(task),
-        messageContextVersion: task.contextVersion,
-        messageGeneratedAt: new Date(),
+  if (!preserveMessage || !task.motivationalMessage)
+    await Task.updateOne(
+      { _id: id, userId, contextVersion: task.contextVersion },
+      {
+        $set: {
+          motivationalMessage: templateMessage(task),
+          messageContextVersion: task.contextVersion,
+          messageGeneratedAt: new Date(),
+        },
       },
-    },
-  );
+    );
   // Pending state is durable. Failed/interrupted processing can be manually retried.
   const key = String(id);
   clearTimeout(pendingTimers.get(key));

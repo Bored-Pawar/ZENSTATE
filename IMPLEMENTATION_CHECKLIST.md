@@ -13,14 +13,14 @@ Assessment date: 23 October 2026. **I** = implemented; **V** = verified by the e
 | 4 Availability / planner      | I + V application rules — real availability, saved versioned conversations, bounded/paginated history, explicit idempotent confirmation. Simulated valid/malformed provider and missing-key paths verified. Live Groq semantics remain B.                           |
 | 5 Context / motivation        | I + V — current-source recomputation, write-time invalidation, coalescing, durable pending/failed state, templates, progress and linked-chat updates, compare-and-set version guard including out-of-order AI results. Live extraction quality remains B.           |
 | 6 Reminders / TTS / reports   | I + V — due checks, typed IDs, queue, atomic claims, saved snooze/delivery, latest-state cancellation, accurate weekly records and review-tomorrow actions. Speech callbacks/unavailable state verified with browser simulation; audible native playback remains B. |
-| 7 Verification / handoff      | V — production build, 13 focused tests, 20 real standalone API scenarios, 3 browser walkthroughs, desktop/mobile screenshot inspection, lockfiles, environment examples and README. Full live-AI/voice lab rehearsal remains B.                                     |
+| 7 Verification / handoff      | V — production build, 14 focused tests, 26 real standalone API scenarios, 10 browser walkthroughs, desktop/mobile screenshot inspection, lockfiles, environment examples and README. Full live-AI/voice lab rehearsal remains B.                                    |
 
 ## Verification evidence
 
 - `npm run build`: passes using Vite 8.3.5. React Router emits non-fatal client-directive bundler warnings.
-- `npm test`: 13/13 pass (dates, DST/overnight, adjacency, union capacity, patch validation, provider JSON/timeout, reminder eligibility/snooze, templates, report counts).
-- `npm --prefix server run test:local`: 20/20 pass against the existing real standalone MongoDB 8.3 service with an isolated test database using Mongoose 8.24.6. Tests exercise ordered ordinary writes, indexes, HTTP ownership checks and injected partial-write recovery. This is not a mocked database or an application persistence fallback.
-- `npm run test:browser`: 3/3 pass in installed headless Chrome against the isolated database-backed server. Includes registration, setup/reload, task/note saving and simulated save failure, manual correction after an actual missing-key response, fixed-slot confirmation, reports, logout/login, late-response isolation, real due popups, saved snooze/delivery, refresh deduplication and simulated speech callbacks/unavailability/preview.
+- `npm test`: 14/14 pass (dates, DST/overnight, adjacency, union capacity, patch validation, provider JSON/timeout, reminder eligibility/snooze, templates, report counts).
+- `npm --prefix server run test:local`: 26/26 pass against the existing real standalone MongoDB 8.3 service with an isolated test database using Mongoose 8.24.6. Tests exercise ordered ordinary writes, indexes, HTTP ownership checks and injected partial-write recovery. This is not a mocked database or an application persistence fallback.
+- `npm run test:browser`: 10/10 pass in installed headless Chrome against the isolated database-backed server. Includes registration, setup/reload, task/note saving and simulated save failure, manual correction after an actual missing-key response, fixed-slot confirmation, reports, logout/login, late-response isolation, real due popups, saved snooze/delivery, refresh deduplication and simulated speech callbacks/unavailability/preview.
 - Browser walkthroughs pass with the existing design. Desktop/mobile screenshots were inspected in the previous implementation session; no new visual redesign was made.
 - Previous implementation-session dependency audits reported zero known vulnerabilities; no fresh dependency audit was performed for this scoped change.
 
@@ -54,7 +54,7 @@ Assessment date: 23 October 2026. **I** = implemented; **V** = verified by the e
 | PLAN-04            | V — saved conversation API, owner-checked paginated history, restored failed chat and reopened linked-task context                                                                                                               |
 | PLAN-05            | V — confirmation retries return the same task; a concurrent in-progress request may return 409; unique source relationship; repeated failed-message retry stores one user message                                                |
 | PLAN-06            | V — stale draft version and newly occupied selected slot rejected without orphan task; API                                                                                                                                       |
-| PLAN-07            | V — timeout/invalid JSON adapter tests, malformed upstream/API and missing-key retries preserve input; **B live Groq happy path**                                                                                                |
+| PLAN-07            | V — timeout/invalid JSON adapter tests, malformed upstream/API and missing-key retries preserve input; Prior live Groq smoke passed; not repeated in this stability pass                                                         |
 | CTX-01             | V current template reflects saved difficulty; simulated context pipeline works. **B live AI extraction quality**                                                                                                                 |
 | CTX-02             | V — note edit/delete removes unsupported old details from current template/context; real database                                                                                                                                |
 | CTX-03             | V — deliberately held older AI response completes after newer response; cannot overwrite version 2; real database + simulated provider                                                                                           |
@@ -82,18 +82,18 @@ Assessment date: 23 October 2026. **I** = implemented; **V** = verified by the e
 - [x] Use mongodb://127.0.0.1:27017/zenstate_dev in ignored server/.env; generate missing signing secret privately; configure matching API/origin.
 - [x] Keep unique sourceConversationId; add optional planConfirmationReady/planDraftVersion receipt fields. Existing records require no migration; legacy scheduleVersion retained unused.
 - [x] Check official Groq model/JSON docs, configure openai/gpt-oss-20b and backend-only helper; add opt-in test:groq script.
-- [x] Verify 13 focused tests, 20 standalone API scenarios, 3 browser walkthroughs, frontend build, normal startup/ready health.
+- [x] Verify 14 focused tests, 26 standalone API scenarios, 10 browser walkthroughs, frontend build, normal startup/ready health.
 - [x] Update README/environment examples/handoff; replace old replica-set guidance.
-- [ ] BLOCKED: live Groq planning/context generation. AI_API_KEY absent; test:groq reports blocked before a call or test DB is created.
-- [ ] MANUAL: audible native TTS/autoplay and retained project account app/OS restart rehearsal.
+- [x] Earlier configuration session verified genuine Groq planning/conversation/note context. This stability pass leaves credentials unchanged and intentionally uses simulated/absent AI, with no new live calls.
+- [ ] MANUAL by tools: audible native TTS/autoplay and OS restart. User reports audible voice works; speech regression callbacks are simulated.
 
 Five new API scenarios cover grouped save/delete/split partial failures, placement/conversion/split cleanup, confirmation link recovery, retryable completion/partial deletion, and assistant-save/status recovery. Selected I/O failures are simulated while persistence is real standalone MongoDB. Earlier 15-scenario replica-set evidence is superseded. Scenario12 now tests sequential overlap rejection; no concurrency/transaction-level guarantee remains.
 
 Ordinary writes can leave partial records after a crash/outage or concurrent edits. PARTIAL_WRITE requires inspection; saved completion/session/metadata errors ask to retry their named action; PARTIAL_DELETE can already have removed children. This is documented behavior, not atomic rollback. Browser speech callbacks are simulated, not audible verification. No unrelated database or service configuration was changed.
 
-## Configuration still required
+## Current configuration and manual checks
 
-Add replacement AI_API_KEY privately in server/.env, restart backend, run npm --prefix server run test:groq once. All independent local DB/JWT/frontend-origin configuration is complete. Keep the browser open and verify speakers with Preview reminder. Do not overwrite real environment files or change MongoDB services/replication/storage.
+Keep the working local MongoDB/JWT/AI environment unchanged. Restart only the app backend/frontend after source changes; backend initialises the optional reschedule receipt index. No service or data migration is needed. Live AI need not be called repeatedly for these UI fixes. Keep the browser open and verify native speakers with Preview reminder as part of a human lab rehearsal; automated speech checks simulate callbacks.
 
 ## Documented defaults / scope choices
 
@@ -107,3 +107,16 @@ Add replacement AI_API_KEY privately in server/.env, restart backend, run npm --
 ## Deferred by the brief
 
 Closed-tab push/background delivery, local model hosting, external TTS audio, embeddings/vector/graph memory, cross-task memory, recurring task optimisation, automatic displacement, external job queues, account recovery/social login/refresh tokens, and deployment/redesign remain deliberately outside scope.
+
+## Focused stability pass — actual causes and completion
+
+- [x] Reproduced four duplicate task forms after background refresh. Cause: TaskForm and NotesEditor had identical sibling task.id keys; distinct keys fix reconciliation. StrictMode/refresh stay enabled. Save/error/cancel/duplicate-submit and complete/reopen preserve one task ID and local input; missing404 is stable.
+- [x] Confirm success previously restored the confirmed chat/pointer. Now reset active state/pointer/query only after success, keep saved task-linked chat, and invalidate stale requests. Lost-response retry and cross-user late-response tests pass; server lifecycle/ownership remains authoritative.
+- [x] Replace future-only move restriction with ID-preserving upcoming moves and linked started/missed replacements. Save replacement first; unique per-source receipt handles retries and interrupted final linking. Split keeps first-half ID/history links; exact saved minutes remain the required effort.
+- [x] Remove cancelled-session calendar filter. Green completed/red unfinished/grey retired states have labels/legend; early cancellation reason is saved. Legacy supersedes links are recognised across weeks on reads; deleted timestamps/unknown causes are not invented. Retired rows do not occupy capacity or add planned effort twice.
+- [x] Shared SessionEditor for task/calendar: Start carries End, duration shown, separate saved-interval Split with midpoint, specific failure messages, completed/started split restrictions clear. Held/flexible conversions retain the existing task placement form.
+- [x] Stop page-wide speech cancellation on ordinary cache refresh; owner-lifetime checking and actual status/time changes retire stale popups. Metadata no-op/non-context edits avoid AI and meaningful edits retain prepared text during refresh. Existing notes/planner/motivation/voice/snooze flows preserved.
+- [x] Focused14/14, standalone API26/26, browser10/10 with exact disposable historical-fixture DB, production build pass. Existing three browser regressions preserved; seven new stability journeys added. HTTP/write failures, provider replies and speech callbacks are simulated where stated; MongoDB persistence is real.
+- [x] Development handoff/checklist updated with causes, changed files, validation and limitations. Larger commitment-list, recurring-goal and longer-coach enhancements paused; no new infrastructure, credentials or service changes.
+
+Remaining limits: deleted historical records cannot be recreated; legacy cancellation causes without stored evidence stay generic. Unique retry receipts do not provide transaction-level atomicity or general concurrency locks. Inspect PARTIAL_WRITE; retry RESCHEDULE_SAVED with the same requested placement. Native audible playback was not rechecked by tools. No live AI requests were repeated in this pass.

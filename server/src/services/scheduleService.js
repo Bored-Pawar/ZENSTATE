@@ -97,49 +97,118 @@ export async function deleteBlock(userId, id, scope = "one") {
 }
 export async function mutateSession(userId, id, body, split = false) {
   const user = await User.findById(userId);
-  if (!user) fail("User not found", 404);
   const old = await ScheduleBlock.findOne({
     _id: id,
     userId,
     recordType: "session",
   });
-  if (!old) fail("Session not found", 404);
-  if (old.status !== "pending" || +old.startAt <= Date.now())
-    fail("Only upcoming sessions can be moved or split", 409);
-  const start = split ? +old.startAt : +new Date(body.startAt),
-    end = split ? +old.endAt : +new Date(body.endAt);
+  if (!user || !old) fail("Session not found", 404);
+  const task = await Task.findOne({ _id: old.taskId, userId });
+  if (!task) fail("Task not found", 404);
+  if (old.status === "completed" || task.status === "completed")
+    fail("Completed work cannot be moved or split", 409);
+  if (task.placementMode !== "scheduled")
+    fail(
+      "Use Reschedule / change placement to assign held or flexible remaining work.",
+      409,
+    );
+  const duration = +old.endAt - +old.startAt;
+  const start = split ? +old.startAt : +new Date(body.startAt);
+  const end = split ? +old.endAt : +new Date(body.endAt);
   if (
     !Number.isFinite(start) ||
     !Number.isFinite(end) ||
-    start <= Date.now() ||
     end <= start ||
-    end - start !== +old.endAt - +old.startAt
+    end - start !== duration
   )
-    fail("Moving must preserve the session duration and use future time");
+    fail(
+      "Keep the saved session duration unchanged. Use Split to divide it.",
+      400,
+      "INVALID_DURATION",
+    );
+  const existing =
+    !split &&
+    (await ScheduleBlock.findOne({
+      userId,
+      taskId: old.taskId,
+      $or: [{ rescheduleSourceId: old._id }, { supersedesSessionId: old._id }],
+    }));
+  const retireOriginal = async (replacement) => {
+    await ScheduleBlock.updateOne(
+      { _id: old._id, userId, status: { $in: ["pending", "missed"] } },
+      {
+        $set: {
+          status: +old.endAt < Date.now() ? "missed" : old.status,
+          rescheduledToSessionId: replacement._id,
+          cancelReason: "rescheduled",
+          reminderStatus: "cancelled",
+          snoozedUntil: null,
+        },
+      },
+    );
+  };
+  if (existing) {
+    if (+existing.startAt !== start || +existing.endAt !== end)
+      fail(
+        "This occurrence was already rescheduled. Open its replacement to move it again.",
+        409,
+        "ALREADY_RESCHEDULED",
+      );
+    await retireOriginal(existing); // Recover a lost response or interrupted link write.
+    return [existing];
+  }
+  if (
+    old.status === "cancelled" ||
+    old.rescheduledToSessionId ||
+    Boolean(old.cancelReason)
+  )
+    fail("This occurrence is no longer active. Open its replacement.", 409);
+  if (split && (old.status !== "pending" || +old.startAt <= Date.now()))
+    fail(
+      "Only upcoming unfinished sessions can be split. Reschedule started or missed work instead.",
+      409,
+    );
+  // A retry of a successful upcoming move must not reset its delivered reminder.
+  if (
+    !split &&
+    old.status === "pending" &&
+    +old.startAt === start &&
+    +old.endAt === end
+  )
+    return [old];
+  if (start <= Date.now()) fail("Choose a future start time", 400, "PAST_TIME");
   const point = split ? +new Date(body.splitAt) : null;
   if (
     split &&
-    (!point || point <= start || point >= end || (point - start) % 60000)
+    (!Number.isFinite(point) ||
+      point <= start ||
+      point >= end ||
+      (point - start) % 60000)
   )
-    fail("Split point must be a whole minute strictly inside the session");
-  const { blocks, tasks } = await loadSchedule(userId);
-  const retained = blocks.filter((b) => String(b._id) !== id);
-  const task = await Task.findOne({ _id: old.taskId, userId });
-  if (!task) fail("Task not found", 404);
+    fail(
+      "Split point must be a whole minute strictly inside the saved session",
+      400,
+      "INVALID_SPLIT",
+    );
   if (
     task.deadlineDate &&
-    DateTime.fromMillis(end - 1, { zone: user.timezone }).toISODate() >
-      task.deadlineDate
+    end >
+      DateTime.fromISO(task.deadlineDate, { zone: user.timezone })
+        .plus({ days: 1 })
+        .startOf("day")
+        .toMillis()
   )
-    fail("Session ends after the deadline");
+    fail("Session ends after the task deadline", 400, "DEADLINE_VIOLATION");
+  const { blocks, tasks } = await loadSchedule(userId);
+  const retained = blocks.filter((b) => String(b._id) !== id);
   const dates = [
     DateTime.fromMillis(start, { zone: user.timezone }).toISODate(),
     DateTime.fromMillis(end - 1, { zone: user.timezone }).toISODate(),
   ];
-  for (const d of new Set(dates))
-    for (const b of occupiedOn(d, user.timezone, retained))
+  for (const date of new Set(dates))
+    for (const b of occupiedOn(date, user.timezone, retained))
       if (overlaps({ start, end }, b))
-        fail(`Selected time overlaps “${b.title}”`, 409, "SCHEDULE_CONFLICT");
+        fail(`Selected time overlaps "${b.title}"`, 409, "SCHEDULE_CONFLICT");
   const proposed = (
     split
       ? [
@@ -152,13 +221,99 @@ export async function mutateSession(userId, id, body, split = false) {
     taskId: old.taskId,
     recordType: "session",
     kind: "task",
-    title: old.title,
+    title: task.title,
     startAt: new Date(s),
     endAt: new Date(e),
     status: "pending",
   }));
   validateCapacity(dates, user.timezone, [...retained, ...proposed], tasks);
-  return replaceBlocks(userId, [old.toObject()], proposed);
+  if (split) {
+    // Keep the first half's ID, including any incoming reschedule-history link.
+    // Save the second half before shortening the first; restore on caught failure.
+    const original = old.toObject();
+    const second = new ScheduleBlock({
+      ...proposed[1],
+      supersedesSessionId: old.supersedesSessionId,
+    });
+    old.endAt = new Date(point);
+    old.reminderStatus = "pending";
+    old.reminderDeliveredAt = null;
+    old.snoozedUntil = null;
+    await second.validate();
+    await old.validate();
+    try {
+      await second.save();
+      await old.save();
+      return [old, second];
+    } catch (error) {
+      try {
+        await ScheduleBlock.replaceOne({ _id: old._id, userId }, original);
+        await ScheduleBlock.deleteOne({ _id: second._id, userId });
+      } catch {
+        fail(
+          "Split cleanup could not finish. Reload and inspect this session before retrying.",
+          503,
+          "PARTIAL_WRITE",
+        );
+      }
+      throw error;
+    }
+  }
+  if (old.status === "pending" && +old.startAt > Date.now()) {
+    // An upcoming move is one document update, preserving ID and duration.
+    const moved = await ScheduleBlock.findOneAndUpdate(
+      {
+        _id: old._id,
+        userId,
+        status: "pending",
+        startAt: old.startAt,
+        endAt: old.endAt,
+      },
+      {
+        $set: {
+          startAt: new Date(start),
+          endAt: new Date(end),
+          reminderStatus: "pending",
+          reminderDeliveredAt: null,
+          snoozedUntil: null,
+        },
+      },
+      { new: true, runValidators: true },
+    );
+    if (!moved) fail("Session changed. Reload before moving it.", 409);
+    return [moved];
+  }
+  const replacement = new ScheduleBlock({
+    ...proposed[0],
+    supersedesSessionId: old._id,
+    rescheduleSourceId: old._id,
+  });
+  await replacement.validate();
+  try {
+    await replacement.save();
+  } catch (error) {
+    if (error.code !== 11000) throw error;
+    const winner = await ScheduleBlock.findOne({
+      userId,
+      rescheduleSourceId: old._id,
+    });
+    if (!winner || +winner.startAt !== start || +winner.endAt !== end)
+      fail("A reschedule is already saved. Reload this task.", 409);
+    await retireOriginal(winner);
+    return [winner];
+  }
+  // Keep the saved replacement if this last link fails. The unique source link
+  // lets the exact same PATCH repair it on retry without another occurrence.
+  try {
+    await retireOriginal(replacement);
+  } catch {
+    fail(
+      "Replacement saved. Retry this reschedule to finish retiring the old reminder.",
+      503,
+      "RESCHEDULE_SAVED",
+    );
+  }
+  return [replacement];
 }
 export async function splitRecurring(userId, id, body) {
   const user = await User.findById(userId);

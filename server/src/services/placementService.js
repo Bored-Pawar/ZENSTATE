@@ -14,6 +14,8 @@ export async function markMissed(userId) {
       userId,
       recordType: "session",
       status: "pending",
+      rescheduledToSessionId: { $exists: false },
+      cancelReason: { $exists: false },
       endAt: { $lt: new Date() },
     },
     { $set: { status: "missed" } },
@@ -113,15 +115,52 @@ export async function validatePlacement(user, task, raw) {
 // Replacement sessions save first. Old session snapshots are used only for this
 // placement operation's cleanup; ordinary writes are not transactionally atomic.
 export async function applyPlacement(user, task, raw) {
-  const p = await validatePlacement(user, task, raw);
+  const requested = parse(placementFields, raw);
+  if (
+    !task.isNew &&
+    !(task.sourceConversationId && task.planConfirmationReady === false) &&
+    requested.placementMode === task.placementMode
+  ) {
+    const current = await ScheduleBlock.find({
+      userId: user._id,
+      taskId: task._id,
+      status: "pending",
+      rescheduledToSessionId: { $exists: false },
+      cancelReason: { $exists: false },
+    }).sort({ startAt: 1 });
+    const intervals = (values) =>
+      values
+        .map((b) => `${+new Date(b.startAt)}:${+new Date(b.endAt)}`)
+        .sort()
+        .join(",");
+    if (
+      (requested.placementMode === "scheduled" &&
+        current.length &&
+        intervals(current) === intervals(requested.sessions || [])) ||
+      (requested.placementMode === "flexible" &&
+        task.flexibleDate === requested.flexibleDate &&
+        +(task.flexibleReminderAt || 0) ===
+          +(requested.flexibleReminderAt
+            ? new Date(requested.flexibleReminderAt)
+            : 0)) ||
+      (requested.placementMode === "held" && !current.length)
+    ) {
+      task.$locals.placementChanged = false;
+      return task;
+    }
+  }
+  const p = await validatePlacement(user, task, requested);
+  task.$locals.placementChanged = true;
   await markMissed(user._id);
   const old = await ScheduleBlock.find({
     userId: user._id,
     taskId: task._id,
     status: { $in: ["pending", "missed"] },
+    rescheduledToSessionId: { $exists: false },
+    cancelReason: { $exists: false },
   }).lean();
   const missed = old
-    .filter((b) => b.status === "missed")
+    .filter((b) => b.status === "missed" || +b.startAt <= Date.now())
     .sort((a, b) => +a.startAt - +b.startAt);
   const replacements =
     p.placementMode === "scheduled"
@@ -159,6 +198,12 @@ export async function applyPlacement(user, task, raw) {
     await task.save();
     // Restrict updates to the captured IDs: never cancel the new sessions.
     for (const block of old) {
+      const historical = +block.startAt <= Date.now();
+      const replacement = historical
+        ? replacements[
+            missed.findIndex((b) => String(b._id) === String(block._id))
+          ] || replacements[0]
+        : null;
       await ScheduleBlock.updateOne(
         { _id: block._id, userId: user._id },
         {
@@ -167,6 +212,13 @@ export async function applyPlacement(user, task, raw) {
               block.status === "pending" && +block.endAt > Date.now()
                 ? "cancelled"
                 : block.status,
+            ...(replacement
+              ? {
+                  rescheduledToSessionId: replacement._id,
+                  cancelReason: "rescheduled",
+                  status: +block.endAt < Date.now() ? "missed" : block.status,
+                }
+              : { cancelReason: "placement_changed" }),
             reminderStatus: "cancelled",
             snoozedUntil: null,
           },

@@ -91,6 +91,10 @@ const block = schema({
   },
   completedAt: Date,
   supersedesSessionId: Schema.Types.ObjectId,
+  rescheduledToSessionId: Schema.Types.ObjectId,
+  // Unique only for new per-session reschedules; legacy records are untouched.
+  rescheduleSourceId: Schema.Types.ObjectId,
+  cancelReason: String,
   reminderStatus: { type: String, default: "pending" },
   reminderDeliveredAt: Date,
   snoozedUntil: Date,
@@ -120,6 +124,13 @@ block.pre("validate", function () {
 });
 block.index({ userId: 1, weekday: 1 });
 block.index({ userId: 1, startAt: 1 });
+block.index(
+  { rescheduleSourceId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { rescheduleSourceId: { $type: "objectId" } },
+  },
+);
 const note = schema({
   ...owned,
   taskId: { type: Schema.Types.ObjectId, ref: "Task", default: null },

@@ -1651,3 +1651,11 @@ button:disabled {
     height: 520px;
   }
 }
+
+/* Calendar history is always visible, with text labels as well as colour. */
+.time-block.task.session-completed { background: #dff1e6; border-left-color: #257548; color: #164c2e; opacity: 1; }
+.time-block.task.session-unfinished { background: #ffe4e1; border-left-color: #b33135; color: #8a2228; opacity: 1; }
+.time-block.task.session-retired { background: #eceef1; border-left-color: #747b86; color: #4c5562; opacity: 1; }
+.calendar-legend { font-size: .8rem; color: #4c5562; }
+.legend-completed { color: #257548; }
+.legend-unfinished { color: #a32a30; }

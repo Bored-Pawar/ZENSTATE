@@ -47,7 +47,7 @@ export function calendarSegments(blocks, date, zone) {
           at(b.endsNextDay ? d.plus({ days: 1 }) : d, b.endMinute),
         ]);
       }
-    else if (b.status !== "cancelled")
+    else
       intervals.push([
         DateTime.fromISO(b.startAt, { zone }),
         DateTime.fromISO(b.endAt, { zone }),
@@ -65,4 +65,37 @@ export function calendarSegments(blocks, date, zone) {
       }
   }
   return pieces;
+}
+
+// Labels mirror saved session facts, never the parent's active-task filter.
+export function sessionPresentation(session) {
+  if (session.status === "completed")
+    return { tone: "session-completed", label: "Completed session" };
+  if (session.rescheduledToSessionId || session.cancelReason === "rescheduled")
+    return {
+      tone: "session-retired",
+      label:
+        session.status === "missed"
+          ? "Rescheduled — missed occurrence"
+          : "Rescheduled — started occurrence",
+    };
+  if (session.status === "cancelled" || session.cancelReason)
+    return {
+      tone: "session-retired",
+      label:
+        session.cancelReason === "task_completed_early"
+          ? "Cancelled — task completed early."
+          : session.cancelReason === "placement_changed"
+            ? "Cancelled — placement changed"
+            : "Cancelled — placement removed",
+    };
+  return {
+    tone: "session-unfinished",
+    label:
+      session.status === "missed" || +new Date(session.endAt) < Date.now()
+        ? "Unfinished — missed"
+        : +new Date(session.startAt) <= Date.now()
+          ? "Unfinished — ongoing"
+          : "Unfinished — upcoming",
+  };
 }

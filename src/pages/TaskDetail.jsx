@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { api } from "../services/apiConfig";
@@ -8,6 +8,8 @@ import CoachButton from "../components/CoachButton";
 import TaskForm from "../components/TaskForm";
 import NotesEditor from "../components/NotesEditor";
 import PlacementForm from "../components/PlacementForm";
+import SessionEditor from "../components/SessionEditor";
+import { sessionPresentation } from "../services/dates";
 export default function TaskDetail() {
   const { taskId } = useParams(),
     { state, act, zone, conversationAction } = useApp(),
@@ -20,28 +22,52 @@ export default function TaskDetail() {
       placementMode: "held",
       sessions: [],
     }),
-    [deleteConfirm, setDeleteConfirm] = useState(false);
+    [deleteConfirm, setDeleteConfirm] = useState(false),
+    [missing, setMissing] = useState(false),
+    [sessionEditing, setSessionEditing] = useState(null);
+  const requestVersion = useRef(0);
   useEffect(() => {
+    if (missing) return;
     let active = true;
     setTask((previous) => (previous?.id === taskId ? previous : null));
-    const load = () =>
-      api(`/tasks/${taskId}`)
+    const load = () => {
+      const version = ++requestVersion.current;
+      return api(`/tasks/${taskId}`)
         .then((t) => {
-          if (active) {
+          if (active && version === requestVersion.current) {
             setTask(t);
             setError("");
           }
         })
         .catch((e) => {
-          if (active) setError(e.message);
+          if (active && version === requestVersion.current) {
+            if (e.status === 404) {
+              setMissing(true);
+              setTask(null);
+              clearInterval(timer);
+            } else setError(e.message);
+          }
         });
-    load();
+    };
     const timer = setInterval(load, 4000);
+    load();
     return () => {
       active = false;
       clearInterval(timer);
     };
-  }, [taskId, state.tasks]);
+  }, [taskId, state.tasks, missing]);
+  useEffect(() => {
+    setMissing(false);
+    setEdit(false);
+    setPlacing(false);
+    setSessionEditing(null);
+  }, [taskId]);
+  if (missing)
+    return (
+      <p role="status">
+        Task not found. <Link to="/tasks">Back to tasks</Link>
+      </p>
+    );
   if (!task)
     return (
       <p className={error ? "error" : ""}>{error || "Loading saved task…"}</p>
@@ -98,7 +124,7 @@ export default function TaskDetail() {
             disabled={task.status === "completed"}
             onClick={() => setPlacing(!placing)}
           >
-            Change placement
+            Reschedule / change placement
           </button>
         </div>
         <p className="hint">
@@ -107,7 +133,7 @@ export default function TaskDetail() {
         </p>
         {edit && (
           <TaskForm
-            key={task.id}
+            key={`details-${task.id}`}
             task={task}
             onSaved={() => setEdit(false)}
             onCancel={() => setEdit(false)}
@@ -144,23 +170,32 @@ export default function TaskDetail() {
                     {formatInstant(s.startAt, zone)} —{" "}
                     {formatInstant(s.endAt, zone)}
                   </strong>
-                  <small>
-                    {s.status}
-                    {s.supersedesSessionId
-                      ? " · replacement for missed work"
-                      : ""}
-                  </small>
+                  <small>{sessionPresentation(s).label}</small>
                 </div>
-                {["pending", "missed"].includes(s.status) && (
-                  <AsyncButton
-                    disabled={+new Date(s.startAt) > Date.now()}
-                    onClick={() =>
-                      act(`/schedule/sessions/${s.id}/complete`, {})
-                    }
-                  >
-                    Complete session
-                  </AsyncButton>
-                )}
+                {["pending", "missed"].includes(s.status) &&
+                  !s.rescheduledToSessionId &&
+                  !s.cancelReason &&
+                  task.status !== "completed" && (
+                    <button
+                      className="secondary"
+                      onClick={() => setSessionEditing(s)}
+                    >
+                      Reschedule session
+                    </button>
+                  )}
+                {["pending", "missed"].includes(s.status) &&
+                  !s.rescheduledToSessionId &&
+                  !s.cancelReason &&
+                  task.status !== "completed" && (
+                    <AsyncButton
+                      disabled={+new Date(s.startAt) > Date.now()}
+                      onClick={() =>
+                        act(`/schedule/sessions/${s.id}/complete`, {})
+                      }
+                    >
+                      Complete session
+                    </AsyncButton>
+                  )}
               </div>
             ))
           ) : (
@@ -172,7 +207,13 @@ export default function TaskDetail() {
             </p>
           )}
         </section>
-        <NotesEditor key={task.id} taskId={task.id} />
+        {sessionEditing && (
+          <SessionEditor
+            session={sessionEditing}
+            onClose={() => setSessionEditing(null)}
+          />
+        )}
+        <NotesEditor key={`notes-${task.id}`} taskId={task.id} />
         {task.sourceConversationId && (
           <AsyncButton
             onClick={async () => {

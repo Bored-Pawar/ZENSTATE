@@ -78,7 +78,7 @@ npm run build
 npm --prefix server run test:groq
 ```
 
-Verified: **13 focused tests**, **20 real standalone MongoDB/API scenarios**, **3 browser walkthroughs**, frontend build, normal backend startup and health. AI in automated API/browser tests is absent or simulated. **Live Groq and audible native TTS are not verified.** The live checker currently reports blocked because the key is absent. Build has non-fatal React Router client-directive warnings.
+Verified: **14 focused tests**, **26 real standalone MongoDB/API scenarios**, **10 browser walkthroughs**, frontend build, normal backend startup and health. AI in automated API/browser tests is absent or simulated. **This stability pass uses simulated AI/speech checks.** An earlier configuration check passed genuine Groq planning and note-derived context; the user reports audible voice works. No new live AI calls or native audible checks were made in this pass. Working credentials are unchanged. Build has non-fatal React Router client-directive warnings.
 
 `test:local` connects to the existing server at port 27017, creates only its generated `zenstate_test_standalone_<timestamp>_<pid>` database and drops only that database. It never starts/stops mongod, clears `zenstate_dev`, or changes server settings. `test:groq` is opt-in, checks model access and uses a separate `zenstate_test_groq_*` database; it makes a small planning/context smoke test, rejects template fallbacks as success, and cleans its test database.
 
@@ -128,3 +128,5 @@ Expected: service Running, TCP succeeded, API `data.status` = `ready`. In MongoD
 6. Log out/in and show retained data; sign in as another user to show separation. App restarts retain the same database; never reset the project DB for a demonstration.
 
 See [DEVELOPMENT_HANDOFF.md](DEVELOPMENT_HANDOFF.md) for model/API details and [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md) for evidence and remaining checks.
+
+The stability browser suite additionally uses saved historical fixtures. Before running the full10 journeys, set TEST*BROWSER_MONGODB_URI in the test terminal to mongodb://127.0.0.1:27017/ followed by the exact generated zenstate_test_standalone*<timestamp>\_<pid> name printed by the test backend. Never use zenstate_dev; the fixture helper rejects it. Two historical-fixture journeys explicitly skip when this variable is absent. Restart the backend after source changes to initialise the optional unique rescheduleSourceId receipt index; no document migration or MongoDB service change is required. See the handoff's stability record for editor-key, planner-reset, history and reminder fixes.

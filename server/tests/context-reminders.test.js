@@ -85,3 +85,68 @@ test("reports distinguish upcoming, missed, completed and cancelled with honest 
     0,
   );
 });
+
+import {
+  calendarSegments,
+  sessionPresentation,
+} from "../../src/services/dates.js";
+test("retired calendar history stays visible but is excluded from planned effort and reminder eligibility", () => {
+  const date = "2026-10-26",
+    start = "2026-10-26T10:00:00Z";
+  const session = {
+    id: "source",
+    recordType: "session",
+    kind: "task",
+    title: "History",
+    startAt: start,
+    endAt: "2026-10-26T10:30:00Z",
+    status: "missed",
+    rescheduledToSessionId: "replacement",
+    reminderStatus: "cancelled",
+  };
+  const completed = {
+    ...session,
+    id: "complete",
+    status: "completed",
+    rescheduledToSessionId: undefined,
+  };
+  const replacement = {
+    ...session,
+    id: "replacement",
+    status: "pending",
+    startAt: "2026-10-26T13:00:00Z",
+    endAt: "2026-10-26T13:30:00Z",
+    rescheduledToSessionId: undefined,
+  };
+  const cancelled = {
+    ...replacement,
+    id: "cancelled",
+    status: "cancelled",
+    cancelReason: "task_completed_early",
+  };
+  const all = [session, completed, replacement, cancelled];
+  assert.equal(calendarSegments(all, date, "UTC").length, 4);
+  assert.equal(sessionPresentation(completed).tone, "session-completed");
+  assert.equal(sessionPresentation(replacement).tone, "session-unfinished");
+  assert.equal(
+    sessionPresentation(cancelled).label,
+    "Cancelled \u2014 task completed early.",
+  );
+  assert.equal(sessionPresentation(session).tone, "session-retired");
+  const report = summariseSessions(
+    all,
+    [date],
+    "UTC",
+    Date.parse("2026-10-26T12:00:00Z"),
+  );
+  assert.equal(report.plannedSessions, 2);
+  assert.equal(report.plannedMinutes, 60);
+  assert.equal(report.completedMinutes, 30);
+  assert.equal(report.missedSessions, 0);
+  assert.equal(report.rescheduledSessions, 1);
+  assert.equal(report.historicalMissedSessions, 1);
+  assert.equal(
+    reminderEligible({ ...session, reminderStatus: "pending" }, now),
+    false,
+  );
+});

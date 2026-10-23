@@ -1,3 +1,4 @@
+import { retiredSession, withRescheduleHistory } from "../utils/sessions.js";
 import { Task, ScheduleBlock } from "../models/index.js";
 import {
   day,
@@ -41,7 +42,7 @@ export function occupiedOn(date, zone, blocks) {
       for (const d of [plusDays(date, -1), date])
         if (day(d, zone).weekday === b.weekday)
           intervals.push(occurrence(b, d, zone));
-    } else if (b.status !== "cancelled")
+    } else if (!retiredSession(b))
       intervals.push({
         start: +new Date(b.startAt),
         end: +new Date(b.endAt),
@@ -88,7 +89,9 @@ export function availabilityForDay(
   };
 }
 export async function loadSchedule(userId, excludeTaskId) {
-  const blocks = await ScheduleBlock.find({ userId }).lean();
+  const blocks = withRescheduleHistory(
+    await ScheduleBlock.find({ userId }).lean(),
+  );
   const tasks = await Task.find({ userId }).lean();
   return {
     blocks: blocks.filter(
@@ -188,7 +191,7 @@ export function validateRecurring(proposed, existing, zone, now = Date.now()) {
   for (const b of existing.filter(
     (b) =>
       b.recordType === "session" &&
-      b.status !== "cancelled" &&
+      !retiredSession(b) &&
       +new Date(b.endAt) > now,
   )) {
     const date = DateTime.fromJSDate(new Date(b.startAt), { zone }).toISODate();

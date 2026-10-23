@@ -20,6 +20,7 @@ export default function Planner() {
     [cursor, setCursor] = useState(undefined);
   const conversation = state.conversation;
   useEffect(() => {
+    if (!conversation) setText("");
     setOlder([]);
     setCursor(undefined);
   }, [conversation?.id]);
@@ -44,7 +45,7 @@ export default function Planner() {
     setError("");
     try {
       const d = await conversationAction("/planner/conversations", {});
-      remember(d.conversation);
+      if (d) remember(d.conversation);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -62,6 +63,7 @@ export default function Planner() {
     try {
       if (!id) {
         const d = await conversationAction("/planner/conversations", {});
+        if (!d) return;
         id = d.conversation.id;
         remember(d.conversation);
       }
@@ -71,14 +73,17 @@ export default function Planner() {
           m.content === content &&
           m.status !== "responded",
       );
-      await conversationAction(`/planner/conversations/${id}/messages`, {
-        content,
-        clientMessageId:
-          retry?.clientMessageId ||
-          failed?.clientMessageId ||
-          crypto.randomUUID(),
-      });
-      setText("");
+      const reply = await conversationAction(
+        `/planner/conversations/${id}/messages`,
+        {
+          content,
+          clientMessageId:
+            retry?.clientMessageId ||
+            failed?.clientMessageId ||
+            crypto.randomUUID(),
+        },
+      );
+      if (reply) setText("");
     } catch (e) {
       setError(e.message);
       if (id) await loadConversation(id).catch(() => {});

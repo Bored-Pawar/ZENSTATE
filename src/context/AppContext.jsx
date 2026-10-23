@@ -133,6 +133,19 @@ export function AppProvider({ children }) {
     }
     return user;
   };
+  const resetPlanner = () => {
+    conversationRequest.current++;
+    if (userRef.current)
+      localStorage.removeItem(`zenstate-plan:${userRef.current.id}`);
+    setState((s) => ({
+      ...s,
+      conversation: null,
+      planningTask: null,
+      messages: [],
+      hasMore: false,
+      nextBefore: null,
+    }));
+  };
   const loadConversation = async (id) => {
     const epoch = generation.current,
       sequence = ++conversationRequest.current;
@@ -142,18 +155,34 @@ export function AppProvider({ children }) {
       sequence === conversationRequest.current
     )
       setState((s) => ({ ...s, ...data }));
-    return data;
+    return epoch === generation.current &&
+      sequence === conversationRequest.current
+      ? data
+      : null;
   };
   const conversationAction = async (path, body, method = "POST") => {
     const epoch = generation.current,
       sequence = ++conversationRequest.current;
-    const data = await api(path, { method, body });
+    let data;
+    try {
+      data = await api(path, { method, body });
+    } catch (error) {
+      if (
+        epoch !== generation.current ||
+        sequence !== conversationRequest.current
+      )
+        return null;
+      throw error;
+    }
     if (
       epoch === generation.current &&
       sequence === conversationRequest.current
     )
       setState((s) => ({ ...s, ...data }));
-    return data;
+    return epoch === generation.current &&
+      sequence === conversationRequest.current
+      ? data
+      : null;
   };
   const setConversation = (data) => setState((s) => ({ ...s, ...data }));
   const zone = state.user?.timezone || browserZone();
@@ -172,6 +201,7 @@ export function AppProvider({ children }) {
         loadConversation,
         conversationAction,
         setConversation,
+        resetPlanner,
         zone,
         today: localToday(zone),
       }}

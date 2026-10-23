@@ -30,7 +30,7 @@ export default function PlannerReview() {
     setBusy(true);
     setError("");
     try {
-      await conversationAction(
+      const saved = await conversationAction(
         `/planner/conversations/${c.id}/draft`,
         {
           draftVersion: c.draftVersion,
@@ -47,6 +47,7 @@ export default function PlannerReview() {
         },
         "PATCH",
       );
+      if (!saved) return;
       navigate(path("/planner/availability"));
     } catch (e) {
       setError(e.message);

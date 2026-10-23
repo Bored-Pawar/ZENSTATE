@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useApp } from "../context/AppContext";
 import PlacementForm from "./PlacementForm";
 export default function TaskForm({ task, onSaved, onCancel }) {
   const { act } = useApp(),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const submitting = useRef(false);
   const [fields, setFields] = useState({
     title: task?.title || "",
     goal: task?.goal || "",
@@ -24,6 +25,8 @@ export default function TaskForm({ task, onSaved, onCancel }) {
   const field = (key, value) => setFields({ ...fields, [key]: value });
   const save = async (e) => {
     e.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setError("");
     try {
@@ -41,6 +44,7 @@ export default function TaskForm({ task, onSaved, onCancel }) {
     } catch (e) {
       setError(e.message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   };
@@ -67,6 +71,7 @@ export default function TaskForm({ task, onSaved, onCancel }) {
         <label>
           Planned minutes
           <input
+            disabled={Boolean(task && task.placementMode !== "held")}
             type="number"
             min="1"
             max="10080"
