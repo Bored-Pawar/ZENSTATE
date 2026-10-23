@@ -18,7 +18,8 @@ export default function PlannerAvailability() {
     );
   const d = c.draft,
     p = selection || {
-      placementMode: d.placementMode || "scheduled",
+      placementMode:
+        d.placementMode || (d.taskType === "multi_day" ? "held" : "scheduled"),
       sessions: d.sessions || [],
       flexibleDate: d.flexibleDate,
       flexibleReminderAt: d.flexibleReminderAt,
@@ -45,6 +46,9 @@ export default function PlannerAvailability() {
       <p className="eyebrow">PLAN WITH ZEN · STEP 3 OF 4</p>
       <h2>Choose time that really fits.</h2>
       <p className="flow-copy">
+        {d.taskType === "multi_day"
+          ? "Choose held to save the goal without reserving any days, or place one daily session now. Add more days later with Schedule a day on Task Detail. "
+          : ""}
         {d.durationMinutes} minutes needed. The server excludes sleep, occupied
         commitments, task sessions, flexible reservations and elapsed time
         today. Choose held if there is no room.
@@ -55,6 +59,9 @@ export default function PlannerAvailability() {
           onChange={setSelection}
           durationMinutes={d.durationMinutes || 30}
           deadlineDate={d.deadlineDate}
+          multiDay={d.taskType === "multi_day"}
+          goalStartDate={d.goalStartDate}
+          goalEndDate={d.goalEndDate}
         />
       </div>
       {error && (

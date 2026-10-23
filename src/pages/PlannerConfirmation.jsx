@@ -50,9 +50,21 @@ export default function PlannerConfirmation() {
           <strong>{d.goal}</strong>
         </div>
         <div>
-          <span>Focused time</span>
+          <span>
+            {d.taskType === "multi_day"
+              ? "Preferred daily session"
+              : "Focused time"}
+          </span>
           <strong>{d.durationMinutes} minutes</strong>
         </div>
+        {d.taskType === "multi_day" && (
+          <div>
+            <span>Goal period</span>
+            <strong>
+              {d.goalStartDate} to {d.goalEndDate}
+            </strong>
+          </div>
+        )}
         <div>
           <span>Placement</span>
           <strong>

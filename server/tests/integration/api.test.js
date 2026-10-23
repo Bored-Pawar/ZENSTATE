@@ -2267,3 +2267,386 @@ suite(
     );
   },
 );
+
+suite(
+  "MULTI-DAY: six-month chat goal, additive days, retries, conflicts, independent completion and reminders",
+  async () => {
+    const u = ok(
+      await request(app).post("/api/auth/register").send({
+        name: "Daily Goal Student",
+        email: "daily-goal@test.example",
+        password: "password123",
+        timezone: "UTC",
+      }),
+      201,
+    );
+    const from = DateTime.now().toUTC().startOf("day");
+    const end = from.plus({ months: 6 }).minus({ days: 1 }).toISODate();
+    let prompt;
+    const provider = createServer(async (req, res) => {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      prompt = JSON.parse(body);
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  reply:
+                    "Six months is your goal period; each daily session is 60 minutes. Review and save held, then schedule individual days.",
+                  draftUpdates: {
+                    goal: "Prepare DSA",
+                    motivation: "Interview confidence",
+                    taskType: "multi_day",
+                    goalMonths: 6,
+                    durationMinutes: 60,
+                  },
+                  readyForReview: true,
+                }),
+              },
+            },
+          ],
+        }),
+      );
+    });
+    await new Promise((resolve) => provider.listen(0, "127.0.0.1", resolve));
+    const previous = {
+      AI_BASE_URL: process.env.AI_BASE_URL,
+      AI_API_KEY: process.env.AI_API_KEY,
+      AI_MODEL: process.env.AI_MODEL,
+    };
+    let conversation;
+    try {
+      process.env.AI_BASE_URL = `http://127.0.0.1:${provider.address().port}`;
+      process.env.AI_API_KEY = "test-only";
+      process.env.AI_MODEL = "test-model";
+      conversation = ok(
+        await call(u.token, "post", "/planner/conversations", {}),
+        201,
+      ).conversation;
+      conversation = ok(
+        await call(
+          u.token,
+          "post",
+          `/planner/conversations/${conversation.id}/messages`,
+          {
+            content:
+              "Prepare DSA for six months, one hour per day. I want interview confidence.",
+            clientMessageId: "daily-goal-message-1",
+          },
+        ),
+      ).conversation;
+      assert.match(
+        prompt.messages[0].content,
+        /Never turn months into session minutes/,
+      );
+      assert.equal(conversation.draft.durationMinutes, 60);
+      assert.equal(conversation.draft.goalStartDate, from.toISODate());
+      assert.equal(conversation.draft.goalEndDate, end);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await new Promise((resolve) => provider.close(resolve));
+    }
+    const goal = ok(
+      await call(
+        u.token,
+        "post",
+        `/planner/conversations/${conversation.id}/confirm`,
+        { draftVersion: conversation.draftVersion },
+      ),
+    );
+    assert.equal(goal.taskType, "multi_day");
+    assert.equal(goal.placementMode, "held");
+    assert.equal(
+      await ScheduleBlock.countDocuments({ taskId: goal.id }),
+      0,
+      "No unscheduled days are reserved",
+    );
+    const confirmedAgain = ok(
+      await call(
+        u.token,
+        "post",
+        `/planner/conversations/${conversation.id}/confirm`,
+        { draftVersion: conversation.draftVersion },
+      ),
+    );
+    assert.equal(confirmedAgain.id, goal.id);
+    ok(
+      await call(u.token, "post", "/schedule/blocks", {
+        title: "Sleep",
+        kind: "sleep",
+        daysPreset: "whole",
+        startMinute: 1320,
+        endMinute: 420,
+        endsNextDay: true,
+      }),
+      201,
+    );
+    ok(
+      await call(u.token, "post", "/schedule/blocks", {
+        title: "Class",
+        kind: "fixed",
+        daysPreset: "whole",
+        startMinute: 540,
+        endMinute: 600,
+      }),
+      201,
+    );
+    const slot = (days, hour) => ({
+      startAt: from.plus({ days, hours: hour }).toISO(),
+      endAt: from.plus({ days, hours: hour + 1 }).toISO(),
+    });
+    const place = async (s, placementRequestId) =>
+      call(u.token, "post", `/tasks/${goal.id}/placement`, {
+        placementMode: "scheduled",
+        sessions: [s],
+        ...(placementRequestId ? { placementRequestId } : {}),
+      });
+    const first = slot(1, 8),
+      second = slot(2, 11);
+    const repeats = await Promise.all([
+      place(first, "first-day-request"),
+      place(first, "first-day-request"),
+    ]);
+    repeats.forEach((r) => ok(r));
+    ok(await place(second));
+    assert.equal(await ScheduleBlock.countDocuments({ taskId: goal.id }), 2);
+    const overlap = {
+      startAt: from.plus({ days: 1, hours: 8, minutes: 30 }).toISO(),
+      endAt: from.plus({ days: 1, hours: 9, minutes: 30 }).toISO(),
+    };
+    assert.equal((await place(overlap)).status, 409);
+    assert.equal((await place(slot(1, 6))).status, 409, "Sleep excluded");
+    assert.equal((await place(slot(1, 9))).status, 409, "Commitments excluded");
+    assert.equal(
+      (await place(slot(200, 11))).status,
+      400,
+      "Outside period rejected",
+    );
+    assert.equal(
+      (
+        await call(b, "post", `/tasks/${goal.id}/placement`, {
+          placementMode: "scheduled",
+          sessions: [slot(3, 11)],
+        })
+      ).status,
+      404,
+    );
+    const available = ok(
+      await call(
+        u.token,
+        "get",
+        `/availability?from=${from.plus({ days: 1 }).toISODate()}&to=${from.plus({ days: 1 }).toISODate()}&durationMinutes=60&taskId=${goal.id}`,
+      ),
+    );
+    assert.ok(
+      !available[0].suggestions.some(
+        (s) =>
+          Date.parse(s.startAt) < Date.parse(first.endAt) &&
+          Date.parse(first.startAt) < Date.parse(s.endAt),
+      ),
+      "Existing days of the same goal remain occupied",
+    );
+    let saved = ok(await call(u.token, "get", `/tasks/${goal.id}`));
+    assert.equal(saved.goalEndDate, end);
+    assert.equal(saved.sessions.length, 2);
+    assert.ok(saved.motivationalMessage);
+    const one = saved.sessions.find(
+      (s) => Date.parse(s.startAt) === Date.parse(first.startAt),
+    );
+    const two = saved.sessions.find(
+      (s) => Date.parse(s.startAt) === Date.parse(second.startAt),
+    );
+    const realNow = Date.now;
+    try {
+      Date.now = () => Date.parse(first.startAt) + 1000;
+      let due = ok(await call(u.token, "get", "/reminders/due"));
+      assert.ok(due.some((r) => r.id === `session:${one.id}`));
+      assert.ok(!due.some((r) => r.id === `session:${two.id}`));
+      ok(
+        await call(
+          u.token,
+          "post",
+          `/schedule/sessions/${one.id}/complete`,
+          {},
+        ),
+      );
+      saved = ok(await call(u.token, "get", `/tasks/${goal.id}`));
+      assert.equal(saved.status, "in_progress");
+      assert.equal(
+        saved.sessions.find((s) => s.id === one.id).status,
+        "completed",
+      );
+      assert.equal(
+        saved.sessions.find((s) => s.id === two.id).status,
+        "pending",
+      );
+      Date.now = () => Date.parse(second.startAt) + 1000;
+      due = ok(await call(u.token, "get", "/reminders/due"));
+      assert.ok(due.some((r) => r.id === `session:${two.id}`));
+      assert.ok(!due.some((r) => r.id === `session:${one.id}`));
+      ok(
+        await call(
+          u.token,
+          "post",
+          `/schedule/sessions/${two.id}/complete`,
+          {},
+        ),
+      );
+      assert.equal(
+        (await Task.findById(goal.id)).status,
+        "in_progress",
+        "120 completed minutes must not finish the goal",
+      );
+    } finally {
+      Date.now = realNow;
+    }
+    const third = slot(3, 13);
+    await faultOnce(
+      Task.prototype,
+      "save",
+      function () {
+        return String(this._id) === goal.id;
+      },
+      async () => {
+        const failed = await place(third);
+        assert.equal(failed.status, 503);
+        assert.equal(failed.body.error.code, "DAY_PLACEMENT_SAVED");
+      },
+    );
+    ok(await place(third));
+    assert.equal(
+      await ScheduleBlock.countDocuments({ taskId: goal.id }),
+      3,
+      "Retry repairs task without another session",
+    );
+    const three = await ScheduleBlock.findOne({
+      taskId: goal.id,
+      startAt: new Date(third.startAt),
+    });
+    assert.equal(
+      (
+        await call(u.token, "patch", `/schedule/blocks/${three.id}`, {
+          startAt: slot(200, 13).startAt,
+          endAt: slot(200, 13).endAt,
+        })
+      ).status,
+      400,
+    );
+    const halves = ok(
+      await call(u.token, "post", `/schedule/blocks/${three.id}/split`, {
+        splitAt: from.plus({ days: 3, hours: 13, minutes: 30 }).toISO(),
+      }),
+    );
+    assert.equal(halves.length, 2);
+    // New placement intents can reuse a genuinely freed slot after a move.
+    const fourth = slot(4, 16);
+    ok(await place(fourth, "fourth-day-before-move"));
+    const movedDay = await ScheduleBlock.findOne({
+      taskId: goal.id,
+      startAt: new Date(fourth.startAt),
+    });
+    ok(
+      await call(
+        u.token,
+        "patch",
+        `/schedule/blocks/${movedDay.id}`,
+        slot(4, 17),
+      ),
+    );
+    ok(await place(fourth, "fourth-day-new-placement"));
+    const removedDay = await ScheduleBlock.findOne({
+      taskId: goal.id,
+      startAt: new Date(fourth.startAt),
+    });
+    ok(await call(u.token, "delete", `/schedule/blocks/${removedDay.id}`));
+    assert.equal((await ScheduleBlock.findById(movedDay.id)).status, "pending");
+    assert.equal(
+      (await ScheduleBlock.findById(removedDay.id)).status,
+      "cancelled",
+    );
+    const listed = ok(await call(u.token, "get", "/tasks")).find(
+      (t) => t.id === goal.id,
+    );
+    assert.equal(listed.completedPlannedMinutes, 120);
+    const report = ok(
+      await call(
+        u.token,
+        "get",
+        `/reports/weekly?weekStart=${from.plus({ days: 1 }).startOf("week").toISODate()}`,
+      ),
+    );
+    const expectedMinutes =
+      [first, second].filter(
+        (s) =>
+          DateTime.fromISO(s.startAt).startOf("week").toISODate() ===
+          from.plus({ days: 1 }).startOf("week").toISODate(),
+      ).length * 60;
+    assert.equal(
+      report.completedMinutes,
+      expectedMinutes,
+      "Only actual completed session records count, once",
+    );
+    // An old record with no taskType still follows the original exact-effort rule.
+    const old = await Task.collection.insertOne({
+      userId: new mongoose.Types.ObjectId(u.user.id),
+      title: "Legacy one-off",
+      durationMinutes: 30,
+      placementMode: "held",
+      status: "held",
+    });
+    const legacy = ok(await call(u.token, "get", `/tasks/${old.insertedId}`));
+    assert.equal(legacy.taskType, "one_off");
+    assert.equal(
+      (
+        await call(u.token, "post", `/tasks/${legacy.id}/placement`, {
+          placementMode: "scheduled",
+          sessions: [slot(4, 15)],
+        })
+      ).status,
+      400,
+    );
+    const legacySlot = {
+      startAt: slot(4, 15).startAt,
+      endAt: from.plus({ days: 4, hours: 15, minutes: 30 }).toISO(),
+    };
+    ok(
+      await call(u.token, "post", `/tasks/${legacy.id}/placement`, {
+        placementMode: "scheduled",
+        sessions: [legacySlot],
+      }),
+    );
+    const legacySession = await ScheduleBlock.findOne({ taskId: legacy.id });
+    try {
+      Date.now = () => Date.parse(legacySlot.startAt) + 1000;
+      ok(
+        await call(
+          u.token,
+          "post",
+          `/schedule/sessions/${legacySession.id}/complete`,
+          {},
+        ),
+      );
+    } finally {
+      Date.now = realNow;
+    }
+    assert.equal((await Task.findById(legacy.id)).status, "completed");
+    ok(await call(u.token, "post", `/tasks/${goal.id}/complete`, {}));
+    saved = ok(await call(u.token, "get", `/tasks/${goal.id}`));
+    assert.equal(saved.status, "completed");
+    assert.equal(
+      saved.sessions.filter((s) => s.status === "completed").length,
+      2,
+    );
+    assert.ok(
+      saved.sessions
+        .filter((s) => s.status !== "completed")
+        .every((s) => s.status === "cancelled"),
+    );
+  },
+);

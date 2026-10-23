@@ -222,8 +222,10 @@ export default function Timetable({ setup = false }) {
       )}
       {!loaded && <p>Loading timetable…</p>}
       <p className="calendar-legend">
-        <span className="legend-completed">Green: completed session</span> ?{" "}
-        <span className="legend-unfinished">Red: unfinished session</span> ?{" "}
+        <span className="legend-completed">
+          Green: completed task or session
+        </span>{" "}
+        ? <span className="legend-unfinished">Red: unfinished session</span> ?{" "}
         <span>Grey: cancelled / rescheduled history</span>. Sleep and recurring
         commitments keep their own styles.
       </p>
@@ -252,7 +254,7 @@ export default function Timetable({ setup = false }) {
                 {calendarSegments(blocks, date, zone).map((b, i) => (
                   <button
                     key={`${b.id}-${i}`}
-                    className={`time-block ${b.kind} ${b.status || ""} ${b.recordType === "session" ? sessionPresentation(b).tone : ""}`}
+                    className={`time-block ${b.kind} ${b.status || ""} ${b.recordType === "session" ? (state.tasks.some((t) => t.id === String(b.taskId) && t.status === "completed") ? "session-completed" : sessionPresentation(b).tone) : ""}`}
                     aria-label={`${b.title}: ${b.recordType === "session" ? sessionPresentation(b).label : b.kind}`}
                     title={`${b.title}: ${b.recordType === "session" ? sessionPresentation(b).label : b.kind}`}
                     style={{

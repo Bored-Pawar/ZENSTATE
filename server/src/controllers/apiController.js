@@ -22,6 +22,7 @@ import {
   noteFields,
   dateOnly,
   instant,
+  validateGoalPeriod,
 } from "../utils/validation.js";
 import { day, plusDays, today, DateTime } from "../utils/dates.js";
 import {
@@ -227,9 +228,39 @@ export const updateTask = async (req, res) => {
   const b = parse(taskPatchFields, req.body);
   const user = req.user;
   const task = await own(Task, req);
+  if (b.taskType !== undefined && b.taskType !== task.taskType)
+    fail("Existing task type cannot be changed; create a separate goal");
+  const proposed = { ...task.toObject(), ...b };
+  validateGoalPeriod(proposed);
+  if (
+    task.taskType === "multi_day" &&
+    (b.goalStartDate !== undefined || b.goalEndDate !== undefined)
+  ) {
+    const outside = await ScheduleBlock.exists({
+      userId: user._id,
+      taskId: task._id,
+      $or: [
+        {
+          startAt: {
+            $lt: day(proposed.goalStartDate, user.timezone).toJSDate(),
+          },
+        },
+        {
+          endAt: {
+            $gt: day(
+              plusDays(proposed.goalEndDate, 1),
+              user.timezone,
+            ).toJSDate(),
+          },
+        },
+      ],
+    });
+    if (outside) fail("The goal period must include its saved session history");
+  }
   if (
     b.durationMinutes !== undefined &&
     b.durationMinutes !== task.durationMinutes &&
+    task.taskType !== "multi_day" &&
     task.placementMode !== "held"
   )
     fail("Hold the remaining work before changing planned duration");
@@ -240,6 +271,7 @@ export const updateTask = async (req, res) => {
   });
   if (
     b.durationMinutes !== undefined &&
+    task.taskType !== "multi_day" &&
     b.durationMinutes <
       completed.reduce((n, s) => n + (+s.endAt - +s.startAt) / 60000, 0)
   )
@@ -284,6 +316,8 @@ export const updateTask = async (req, res) => {
         "motivation",
         "planningPreferences",
         "durationMinutes",
+        "goalStartDate",
+        "goalEndDate",
       ].includes(key),
     )
   )
@@ -477,7 +511,12 @@ export const completeSession = async (req, res) => {
     0,
   );
   if (task.status !== "completed")
-    task.status = minutes >= task.durationMinutes ? "completed" : "in_progress";
+    task.status =
+      task.taskType === "multi_day"
+        ? "in_progress"
+        : minutes >= task.durationMinutes
+          ? "completed"
+          : "in_progress";
   if (task.status === "completed") {
     task.completedAt ||= new Date();
     task.reminderStatus = "cancelled";
@@ -511,10 +550,21 @@ export const availability = async (req, res) => {
       .strict(),
     req.query,
   );
-  if (q.taskId) await own(Task, req, q.taskId);
+  const task = q.taskId ? await own(Task, req, q.taskId) : null;
+  if (
+    task?.taskType === "multi_day" &&
+    (q.from < task.goalStartDate || q.to > task.goalEndDate)
+  )
+    fail("Choose availability within the goal period");
   send(
     res,
-    await getAvailability(req.user, q.from, q.to, q.durationMinutes, q.taskId),
+    await getAvailability(
+      req.user,
+      q.from,
+      q.to,
+      q.durationMinutes,
+      task?.taskType === "multi_day" ? undefined : q.taskId,
+    ),
   );
 };
 export const notes = async (req, res) => {
@@ -711,9 +761,17 @@ export const reschedule = async (req, res) => {
       status: "completed",
     }).lean();
     const remaining =
-      task.durationMinutes -
-      complete.reduce((n, s) => n + (+s.endAt - +s.startAt) / 60000, 0);
-    const a = await getAvailability(req.user, date, date, remaining, task._id),
+      task.taskType === "multi_day"
+        ? task.durationMinutes
+        : task.durationMinutes -
+          complete.reduce((n, s) => n + (+s.endAt - +s.startAt) / 60000, 0);
+    const a = await getAvailability(
+        req.user,
+        date,
+        date,
+        remaining,
+        task.taskType === "multi_day" ? undefined : task._id,
+      ),
       slot = a[0].suggestions[0];
     if (!slot)
       fail(

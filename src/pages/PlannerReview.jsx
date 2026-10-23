@@ -38,6 +38,9 @@ export default function PlannerReview() {
             goal: d.goal,
             motivation: d.motivation,
             durationMinutes: Number(d.durationMinutes),
+            taskType: d.taskType || "one_off",
+            goalStartDate: d.goalStartDate || null,
+            goalEndDate: d.goalEndDate || null,
             durationEstimated: false,
             deadlineDate: d.deadlineDate || null,
             planningPreferences: d.planningPreferences || "",
@@ -66,6 +69,39 @@ export default function PlannerReview() {
       <form onSubmit={save}>
         <div className="review-card">
           <label>
+            Task type
+            <select
+              value={d.taskType || "one_off"}
+              onChange={(e) => change("taskType", e.target.value)}
+            >
+              <option value="one_off">One-off task</option>
+              <option value="multi_day">Multi-day goal</option>
+            </select>
+          </label>
+          {d.taskType === "multi_day" && (
+            <div className="form-columns">
+              <label>
+                Goal start date
+                <input
+                  type="date"
+                  required
+                  value={d.goalStartDate || ""}
+                  onChange={(e) => change("goalStartDate", e.target.value)}
+                />
+              </label>
+              <label>
+                Goal end date
+                <input
+                  type="date"
+                  required
+                  min={d.goalStartDate}
+                  value={d.goalEndDate || ""}
+                  onChange={(e) => change("goalEndDate", e.target.value)}
+                />
+              </label>
+            </div>
+          )}
+          <label>
             Task / goal
             <input
               required
@@ -84,7 +120,9 @@ export default function PlannerReview() {
             />
           </label>
           <label>
-            Total focused minutes{" "}
+            {d.taskType === "multi_day"
+              ? "Preferred daily session minutes"
+              : "Total focused minutes"}{" "}
             {d.durationEstimated ? "(AI estimate — please check)" : ""}
             <input
               type="number"

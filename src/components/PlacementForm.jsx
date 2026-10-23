@@ -12,9 +12,16 @@ export default function PlacementForm({
   durationMinutes,
   taskId,
   deadlineDate,
+  multiDay = false,
+  goalStartDate,
+  goalEndDate,
+  requireChoice = false,
 }) {
   const { today, zone } = useApp(),
-    [date, setDate] = useState(value.flexibleDate || today),
+    [date, setDate] = useState(
+      value.flexibleDate ||
+        (multiDay && goalStartDate > today ? goalStartDate : today),
+    ),
     [availability, setAvailability] = useState(null),
     [error, setError] = useState(""),
     [part, setPart] = useState(durationMinutes),
@@ -24,6 +31,10 @@ export default function PlacementForm({
     (n, s) => n + (+new Date(s.endAt) - +new Date(s.startAt)) / 60000,
     0,
   );
+  useEffect(() => {
+    if (multiDay && goalStartDate && date < goalStartDate)
+      setDate(goalStartDate);
+  }, [multiDay, goalStartDate, date]);
   useEffect(() => {
     setPart(Math.max(1, durationMinutes - selectedMinutes));
   }, [durationMinutes, selectedMinutes]);
@@ -53,28 +64,47 @@ export default function PlacementForm({
       flexibleReminderAt: null,
       sessions: mode === "scheduled" ? sessions : [],
     });
-  const add = (slot) => onChange({ ...value, sessions: [...sessions, slot] });
+  const add = (slot) =>
+    onChange({
+      ...value,
+      ...(multiDay
+        ? {
+            placementRequestId: value.placementRequestId || crypto.randomUUID(),
+          }
+        : {}),
+      sessions: [...sessions, slot],
+    });
   return (
     <div className="placement-form">
       <label>
         Placement
         <select
+          required={requireChoice}
           value={value.placementMode}
           onChange={(e) => setMode(e.target.value)}
         >
-          <option value="held">Held — choose a date later</option>
-          <option value="scheduled">Scheduled — dated sessions</option>
-          <option value="flexible">Flexible — reserve one day</option>
+          {requireChoice && (
+            <option value="" disabled>
+              Choose placement
+            </option>
+          )}
+          <option value="scheduled">Fixed — select date and time</option>
+          {!multiDay && (
+            <option value="flexible">
+              Flexible — select a day without an exact time
+            </option>
+          )}
+          <option value="held">Schedule later — held, not scheduled</option>
         </select>
       </label>
-      {value.placementMode !== "held" && (
+      {["scheduled", "flexible"].includes(value.placementMode) && (
         <>
           <label>
             Local date
             <input
               type="date"
-              min={today}
-              max={deadlineDate || undefined}
+              min={multiDay && goalStartDate > today ? goalStartDate : today}
+              max={multiDay ? goalEndDate : deadlineDate || undefined}
               required
               value={date}
               onChange={(e) => {
@@ -93,7 +123,9 @@ export default function PlacementForm({
               {availability.freeMinutes} free minutes ·{" "}
               {availability.reservedMinutes} already reserved ·{" "}
               {availability.remainingMinutes} minutes remaining
-              {taskId ? " (excluding this task’s current placement)" : ""}
+              {taskId && !multiDay
+                ? " (excluding this task’s current placement)"
+                : ""}
             </p>
           ) : (
             <p className="hint">Checking saved availability…</p>
@@ -137,8 +169,10 @@ export default function PlacementForm({
       {value.placementMode === "scheduled" && (
         <>
           <p>
-            {selectedMinutes} / {durationMinutes} minutes selected. Sessions
-            must total the exact remaining effort.
+            {selectedMinutes} / {durationMinutes} minutes selected.{" "}
+            {multiDay
+              ? "Choose one daily session; other dates remain available until scheduled."
+              : "Sessions must total the exact remaining effort."}
           </p>
           {sessions.map((s, i) => (
             <div className="session-item" key={`${s.startAt}-${i}`}>
@@ -160,7 +194,9 @@ export default function PlacementForm({
               </button>
             </div>
           ))}
-          {selectedMinutes < durationMinutes && (
+          {(multiDay
+            ? !sessions.length
+            : selectedMinutes < durationMinutes) && (
             <>
               <label>
                 Minutes in next session

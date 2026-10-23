@@ -1,5 +1,10 @@
 import { Task, ScheduleBlock, User } from "../models/index.js";
-import { placementFields, parse, fail } from "../utils/validation.js";
+import {
+  placementFields,
+  parse,
+  fail,
+  validateGoalPeriod,
+} from "../utils/validation.js";
 import { DateTime, day, plusDays, today } from "../utils/dates.js";
 import {
   loadSchedule,
@@ -23,9 +28,18 @@ export async function markMissed(userId) {
   );
 }
 export async function validatePlacement(user, task, raw) {
+  validateGoalPeriod(task);
   const p = parse(placementFields, raw),
     now = Date.now();
-  const { blocks, tasks } = await loadSchedule(user._id, task._id);
+  const multiDay = task.taskType === "multi_day";
+  const { blocks, tasks } = await loadSchedule(
+    user._id,
+    multiDay ? undefined : task._id,
+  );
+  if (multiDay && p.placementMode === "flexible")
+    fail(
+      "Multi-day goals use individually dated sessions; choose held or schedule a day",
+    );
   const completed = blocks
     .filter(
       (b) => String(b.taskId) === String(task._id) && b.status === "completed",
@@ -44,7 +58,7 @@ export async function validatePlacement(user, task, raw) {
     )
     .map((t) => t.flexibleDate);
   if (p.placementMode === "scheduled") {
-    if (!p.sessions?.length || !remaining)
+    if (!p.sessions?.length || (!multiDay && !remaining))
       fail("Provide dated sessions for the remaining planned effort");
     let minutes = 0;
     for (const s of p.sessions) {
@@ -67,6 +81,13 @@ export async function validatePlacement(user, task, raw) {
       const endDate = DateTime.fromMillis(end - 1, {
         zone: user.timezone,
       }).toISODate();
+      if (
+        multiDay &&
+        (date < task.goalStartDate ||
+          endDate > task.goalEndDate ||
+          date !== endDate)
+      )
+        fail("Choose a session within one local day of the goal period");
       for (const d of new Set([date, endDate])) {
         for (const b of occupiedOn(d, user.timezone, blocks))
           if (overlaps({ start, end }, b))
@@ -85,7 +106,7 @@ export async function validatePlacement(user, task, raw) {
       });
       minutes += duration;
     }
-    if (minutes !== remaining)
+    if (!multiDay && minutes !== remaining)
       fail(
         `Sessions must total exactly ${remaining} remaining minutes; selected ${minutes}`,
       );
@@ -116,6 +137,7 @@ export async function validatePlacement(user, task, raw) {
 // placement operation's cleanup; ordinary writes are not transactionally atomic.
 export async function applyPlacement(user, task, raw) {
   const requested = parse(placementFields, raw);
+  if (task.taskType === "multi_day") return addGoalDay(user, task, requested);
   if (
     !task.isNew &&
     !(task.sourceConversationId && task.planConfirmationReady === false) &&
@@ -253,6 +275,81 @@ export async function applyPlacement(user, task, raw) {
     }
     throw error;
   }
+}
+// Each request adds one dated session. Existing placements are never replaced.
+async function addGoalDay(user, task, requested) {
+  validateGoalPeriod(task);
+  if (requested.placementMode === "held") {
+    if (
+      await ScheduleBlock.exists({
+        userId: user._id,
+        taskId: task._id,
+        status: { $ne: "cancelled" },
+      })
+    )
+      fail("Use the individual session controls to change scheduled days", 409);
+    Object.assign(task, { placementMode: "held", status: "held" });
+    await task.save();
+    return task;
+  }
+  if (
+    requested.placementMode !== "scheduled" ||
+    requested.sessions?.length !== 1
+  )
+    fail("Schedule one dated session at a time for a multi-day goal");
+  const s = requested.sessions[0];
+  const key = `${task._id}:${requested.placementRequestId || `${+new Date(s.startAt)}:${+new Date(s.endAt)}`}`;
+  let block = await ScheduleBlock.findOne({
+    userId: user._id,
+    dayPlacementKey: key,
+  });
+  if (
+    block &&
+    (+block.startAt !== +new Date(s.startAt) ||
+      +block.endAt !== +new Date(s.endAt))
+  )
+    fail(
+      "This placement was already saved and changed. Reload the goal and use Schedule a day for a new placement.",
+      409,
+    );
+  if (!block) {
+    try {
+      await validatePlacement(user, task, requested);
+      block = await ScheduleBlock.create({
+        userId: user._id,
+        taskId: task._id,
+        recordType: "session",
+        kind: "task",
+        title: task.title,
+        ...s,
+        status: "pending",
+        dayPlacementKey: key,
+      });
+    } catch (error) {
+      if (error.code !== 11000 && error.code !== "SCHEDULE_CONFLICT")
+        throw error;
+      block = await ScheduleBlock.findOne({
+        userId: user._id,
+        dayPlacementKey: key,
+      });
+      if (!block) throw error;
+    }
+  }
+  // Keep the receipt/session if the task save fails: retry repairs this one task.
+  Object.assign(task, {
+    placementMode: "scheduled",
+    status: task.status === "in_progress" ? "in_progress" : "pending",
+  });
+  try {
+    await task.save();
+  } catch {
+    fail(
+      "Session saved. Retry this placement to refresh the goal state.",
+      503,
+      "DAY_PLACEMENT_SAVED",
+    );
+  }
+  return task;
 }
 export async function placeTask(userId, id, raw) {
   const user = await User.findById(userId);

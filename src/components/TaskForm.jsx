@@ -11,6 +11,9 @@ export default function TaskForm({ task, onSaved, onCancel }) {
     goal: task?.goal || "",
     motivation: task?.motivation || "",
     durationMinutes: task?.durationMinutes || 30,
+    taskType: task?.taskType || "one_off",
+    goalStartDate: task?.goalStartDate || "",
+    goalEndDate: task?.goalEndDate || "",
     priority: task?.priority || "medium",
     category: task?.category || "Personal",
     deadlineDate: task?.deadlineDate || "",
@@ -18,7 +21,7 @@ export default function TaskForm({ task, onSaved, onCancel }) {
     planningPreferences: task?.planningPreferences || "",
   });
   const [placement, setPlacement] = useState({
-    placementMode: "held",
+    placementMode: "",
     flexibleDate: null,
     sessions: [],
   });
@@ -30,9 +33,15 @@ export default function TaskForm({ task, onSaved, onCancel }) {
     setBusy(true);
     setError("");
     try {
+      if (!task && !placement.placementMode)
+        throw new Error(
+          "Choose Fixed, Flexible, or Schedule later before saving.",
+        );
       const body = {
         ...fields,
         deadlineDate: fields.deadlineDate || null,
+        goalStartDate: fields.goalStartDate || null,
+        goalEndDate: fields.goalEndDate || null,
         ...(!task ? placement : {}),
       };
       const saved = await act(
@@ -50,6 +59,43 @@ export default function TaskForm({ task, onSaved, onCancel }) {
   };
   return (
     <form className="review-card task-form" onSubmit={save}>
+      <label>
+        Task type
+        <select
+          value={fields.taskType}
+          disabled={Boolean(task)}
+          onChange={(e) => {
+            field("taskType", e.target.value);
+            setPlacement({ placementMode: "", sessions: [] });
+          }}
+        >
+          <option value="one_off">One-off task</option>
+          <option value="multi_day">Multi-day goal</option>
+        </select>
+      </label>
+      {fields.taskType === "multi_day" && (
+        <div className="form-columns">
+          <label>
+            Goal start date
+            <input
+              type="date"
+              required
+              value={fields.goalStartDate}
+              onChange={(e) => field("goalStartDate", e.target.value)}
+            />
+          </label>
+          <label>
+            Goal end date
+            <input
+              type="date"
+              required
+              min={fields.goalStartDate}
+              value={fields.goalEndDate}
+              onChange={(e) => field("goalEndDate", e.target.value)}
+            />
+          </label>
+        </div>
+      )}
       <label>
         Task title
         <input
@@ -69,9 +115,15 @@ export default function TaskForm({ task, onSaved, onCancel }) {
       </label>
       <div className="form-columns">
         <label>
-          Planned minutes
+          {fields.taskType === "multi_day"
+            ? "Preferred daily session minutes"
+            : "Planned minutes"}
           <input
-            disabled={Boolean(task && task.placementMode !== "held")}
+            disabled={Boolean(
+              task &&
+                task.taskType !== "multi_day" &&
+                task.placementMode !== "held",
+            )}
             type="number"
             min="1"
             max="10080"
@@ -128,15 +180,21 @@ export default function TaskForm({ task, onSaved, onCancel }) {
       {!task && (
         <PlacementForm
           value={placement}
+          requireChoice
           onChange={setPlacement}
           durationMinutes={fields.durationMinutes}
           deadlineDate={fields.deadlineDate}
+          multiDay={fields.taskType === "multi_day"}
+          goalStartDate={fields.goalStartDate}
+          goalEndDate={fields.goalEndDate}
         />
       )}
       <p className="hint">
-        {task
-          ? "Hold the task before changing duration. Placement changes have their own form below."
-          : "Title-only tasks use a default 30 minutes and stay held until assigned."}
+        {fields.taskType === "multi_day"
+          ? "The period and preferred session minutes are separate. Save held to schedule days later; unplaced days reserve no time."
+          : task
+            ? "Hold the task before changing duration. Placement changes have their own form below."
+            : "Choose Fixed for a date and time, Flexible for a day, or Schedule later to leave this task held. A deadline does not schedule the task."}
       </p>
       {error && (
         <p role="alert" className="error">

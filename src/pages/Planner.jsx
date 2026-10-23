@@ -196,9 +196,14 @@ export default function Planner() {
           {state.planningTask && <p>{state.planningTask.importantContext}</p>}
           <p>
             {draft.durationMinutes
-              ? `${draft.durationMinutes} minutes${draft.durationEstimated ? " (estimate — edit in review)" : ""}`
+              ? `${draft.durationMinutes} minutes${draft.taskType === "multi_day" ? " per daily session" : ""}${draft.durationEstimated ? " (estimate — edit in review)" : ""}`
               : "Duration not yet supplied"}
           </p>
+          {draft.taskType === "multi_day" && (
+            <p>
+              Goal period: {draft.goalStartDate} to {draft.goalEndDate}
+            </p>
+          )}
           <button
             className="primary"
             disabled={

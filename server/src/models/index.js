@@ -31,6 +31,13 @@ const task = schema({
   goal: String,
   motivation: String,
   durationMinutes: Number,
+  taskType: {
+    type: String,
+    enum: ["one_off", "multi_day"],
+    default: "one_off",
+  },
+  goalStartDate: String,
+  goalEndDate: String,
   priority: { type: String, enum: ["low", "medium", "high"] },
   category: String,
   deadlineDate: String,
@@ -95,6 +102,8 @@ const block = schema({
   // Unique only for new per-session reschedules; legacy records are untouched.
   rescheduleSourceId: Schema.Types.ObjectId,
   cancelReason: String,
+  // Receipt for a single additive day placement, including lost-response retries.
+  dayPlacementKey: String,
   reminderStatus: { type: String, default: "pending" },
   reminderDeliveredAt: Date,
   snoozedUntil: Date,
@@ -124,6 +133,13 @@ block.pre("validate", function () {
 });
 block.index({ userId: 1, weekday: 1 });
 block.index({ userId: 1, startAt: 1 });
+block.index(
+  { dayPlacementKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { dayPlacementKey: { $type: "string" } },
+  },
+);
 block.index(
   { rescheduleSourceId: 1 },
   {

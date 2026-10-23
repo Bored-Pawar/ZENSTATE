@@ -160,6 +160,9 @@ test("real browser: new account, resumable setup, saved task/note, planner confi
   await page.getByRole("button", { name: "Add task", exact: true }).click();
   await page.getByLabel("Task title", { exact: true }).fill("Browser lab task");
   await page.getByLabel("Why it matters").fill("Present the lab confidently");
+  await page
+    .getByRole("combobox", { name: "Placement", exact: true })
+    .selectOption("held");
   await page.getByRole("button", { name: "Save task", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Browser lab task" }),

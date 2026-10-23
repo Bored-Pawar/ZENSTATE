@@ -103,6 +103,10 @@ export async function processContext(userId, id, version) {
     preferences: task.planningPreferences,
     status: task.status,
     completedPlannedMinutes: progress,
+    taskType: task.taskType,
+    goalStartDate: task.goalStartDate,
+    goalEndDate: task.goalEndDate,
+    preferredSessionMinutes: task.durationMinutes,
     planningMessages: messages.reverse().map((m) => m.content.slice(0, 1000)),
   };
   let context = `${task.goal || task.title}. ${task.motivation || ""} Preferences: ${task.planningPreferences || "none"}. ${progress} planned session minutes completed. ${sources.length} linked notes. `;

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import {
   inputFromUTC,
@@ -200,6 +201,15 @@ export default function SessionEditor({ session, onClose }) {
           </p>
         )}
         <div className="modal-actions">
+          {session.status === "cancelled" && !completed && (
+            <Link
+              className="secondary"
+              to={`/tasks/${session.taskId}?placement=choose`}
+              onClick={onClose}
+            >
+              Reschedule task
+            </Link>
+          )}
           {movable && +new Date(session.startAt) > Date.now() && (
             <button
               type="button"
@@ -225,7 +235,10 @@ export default function SessionEditor({ session, onClose }) {
                 }
               }}
             >
-              Remove and hold remaining work
+              {state.tasks.find((t) => t.id === String(session.taskId))
+                ?.taskType === "multi_day"
+                ? "Remove this daily session"
+                : "Remove and hold remaining work"}
             </button>
           )}
           {movable && (

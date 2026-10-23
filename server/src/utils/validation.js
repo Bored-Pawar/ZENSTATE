@@ -25,6 +25,9 @@ export const taskFields = z
     goal: text(2000).default(""),
     motivation: text(2000).default(""),
     durationMinutes: z.number().int().min(1).max(10080).default(30),
+    taskType: z.enum(["one_off", "multi_day"]).default("one_off"),
+    goalStartDate: dateOnly.nullable().optional(),
+    goalEndDate: dateOnly.nullable().optional(),
     priority: z.enum(["low", "medium", "high"]).default("medium"),
     category: text(80).default("Personal"),
     deadlineDate: dateOnly.nullable().optional(),
@@ -35,6 +38,7 @@ export const taskFields = z
 export const placementFields = z
   .object({
     placementMode: z.enum(["scheduled", "flexible", "held"]),
+    placementRequestId: z.string().min(8).max(100).optional(),
     flexibleDate: dateOnly.nullable().optional(),
     flexibleReminderAt: instant.nullable().optional(),
     sessions: z
@@ -61,9 +65,24 @@ export const draftFields = taskPatchFields
   .extend({
     goal: text(2000).optional(),
     durationEstimated: z.boolean().optional(),
+    goalDays: z.number().int().min(1).max(3650).optional(),
+    goalMonths: z.number().int().min(1).max(120).optional(),
     ...placementFields.partial().shape,
   })
   .strict();
+export function validateGoalPeriod(task) {
+  if (task.taskType !== "multi_day") return;
+  if (
+    !task.goalStartDate ||
+    !task.goalEndDate ||
+    task.goalEndDate < task.goalStartDate
+  )
+    fail(
+      "Multi-day goals need a start date and an end date on or after the start",
+    );
+  if (task.durationMinutes > 1440)
+    fail("Preferred daily sessions cannot exceed 1440 minutes");
+}
 export const blockFields = z
   .object({
     title: text(160).min(1),

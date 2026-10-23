@@ -83,6 +83,20 @@ export async function deleteBlock(userId, id, scope = "one") {
     const task = await Task.findOne({ _id: block.taskId, userId });
     const user = await User.findById(userId);
     if (!task || !user) fail("Task not found", 404);
+    if (task.taskType === "multi_day") {
+      await ScheduleBlock.updateOne(
+        { _id: block._id, userId },
+        {
+          $set: {
+            status: "cancelled",
+            cancelReason: "placement_removed",
+            reminderStatus: "cancelled",
+            snoozedUntil: null,
+          },
+        },
+      );
+      return { taskId: block.taskId };
+    }
     await applyPlacement(user, task, { placementMode: "held" });
     return { taskId: block.taskId };
   }
@@ -177,6 +191,20 @@ export async function mutateSession(userId, id, body, split = false) {
   )
     return [old];
   if (start <= Date.now()) fail("Choose a future start time", 400, "PAST_TIME");
+  if (task.taskType === "multi_day") {
+    const startDate = DateTime.fromMillis(start, {
+      zone: user.timezone,
+    }).toISODate();
+    const endDate = DateTime.fromMillis(end - 1, {
+      zone: user.timezone,
+    }).toISODate();
+    if (
+      startDate < task.goalStartDate ||
+      endDate > task.goalEndDate ||
+      startDate !== endDate
+    )
+      fail("Keep daily sessions within one local day of the goal period");
+  }
   const point = split ? +new Date(body.splitAt) : null;
   if (
     split &&

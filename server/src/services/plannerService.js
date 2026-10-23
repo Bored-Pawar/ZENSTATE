@@ -10,6 +10,7 @@ import { callAI } from "./aiClient.js";
 import { draftFields, taskFields, parse, fail } from "../utils/validation.js";
 import { applyPlacement, validatePlacement } from "./placementService.js";
 import { invalidateContext } from "./taskContextService.js";
+import { DateTime } from "../utils/dates.js";
 
 export async function readConversation(userId, id, before) {
   const conversation = await Conversation.findOne({ _id: id, userId });
@@ -46,6 +47,7 @@ const aiResult = z
     reply: z.string().trim().min(1).max(3000),
     draftUpdates: draftFields.omit({
       placementMode: true,
+      placementRequestId: true,
       flexibleDate: true,
       flexibleReminderAt: true,
       sessions: true,
@@ -124,6 +126,9 @@ export async function sendMessage(userId, id, body, localDate) {
         goal: planningTask.goal,
         motivation: planningTask.motivation,
         durationMinutes: planningTask.durationMinutes,
+        taskType: planningTask.taskType,
+        goalStartDate: planningTask.goalStartDate,
+        goalEndDate: planningTask.goalEndDate,
         status: planningTask.status,
         planningPreferences: planningTask.planningPreferences,
         importantContext: planningTask.importantContext?.slice(0, 2400),
@@ -158,6 +163,8 @@ export async function sendMessage(userId, id, body, localDate) {
     ...recent,
     { role: "user", content: input.content },
   ];
+  prompts[0].content +=
+    ' Distinguish the overall goal period from per-session minutes. For multi-day goals return taskType:"multi_day", durationMinutes as the preferred daily session minutes, and goalStartDate/goalEndDate (YYYY-MM-DD). If the user gives a number of days or calendar months, return goalDays or goalMonths instead of calculating the end date; the server calculates an inclusive period from goalStartDate or the supplied localDate. Example: "Prepare DSA for six months, one hour per day" => taskType:"multi_day", goalMonths:6, durationMinutes:60. Never turn months into session minutes. Ask if daily session minutes are missing. One-off tasks use taskType:"one_off". Multi-day goals can be saved held and scheduled one day at a time later; never create a recurrence pattern.';
   if (planningTask)
     prompts[0].content +=
       " This task is already confirmed. Discuss its current progress and motivation using the supplied latest task context. Return draftUpdates:{} and readyForReview:false. Do not propose or claim saved schedule/metadata changes. The user can edit task details and placement in the task screen.";
@@ -204,6 +211,25 @@ export async function sendMessage(userId, id, body, localDate) {
         409,
         "STALE_CONTEXT",
       );
+    if (!planningTask && result.draftUpdates.taskType !== "one_off") {
+      const updates = result.draftUpdates;
+      if (updates.goalDays || updates.goalMonths) {
+        const start =
+          updates.goalStartDate ||
+          conversation.draft.goalStartDate ||
+          localDate;
+        updates.taskType = "multi_day";
+        updates.goalStartDate = start;
+        updates.goalEndDate = DateTime.fromISO(start)
+          .plus(
+            updates.goalMonths
+              ? { months: updates.goalMonths }
+              : { days: updates.goalDays },
+          )
+          .minus({ days: 1 })
+          .toISODate();
+      }
+    }
     const updated = await Conversation.findOneAndUpdate(
       {
         _id: id,

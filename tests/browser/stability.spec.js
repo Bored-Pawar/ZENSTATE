@@ -319,7 +319,7 @@ test("move and split: start carries end, split ignores unsaved move, invalid spl
   ).toBeTruthy();
 });
 
-test("calendar: completed green, unfinished red, early-cancelled grey persist after refresh and login", async ({
+test("calendar: completed parents stay green with accurate cancelled labels after refresh and login", async ({
   page,
 }) => {
   test.skip(
@@ -390,14 +390,14 @@ test("calendar: completed green, unfinished red, early-cancelled grey persist af
   expect(finish.ok()).toBeTruthy();
   await page.reload();
   await expect(page.locator(".time-block.task.session-completed")).toHaveCount(
-    1,
+    3,
   );
-  await expect(page.locator(".time-block.task.session-retired")).toHaveCount(1);
-  await expect(page.locator(".time-block.task.session-retired")).toContainText(
-    "task completed early",
-  );
+  await expect(page.locator(".time-block.task.session-retired")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: /Calendar history: Cancelled/ }),
+  ).toContainText("task completed early");
   await expect(page.locator(".time-block.task.session-unfinished")).toHaveCount(
-    1,
+    0,
   );
   await page.getByRole("button", { name: "Log out", exact: true }).click();
   await page.getByLabel("Email", { exact: true }).fill(u.email);
@@ -407,9 +407,9 @@ test("calendar: completed green, unfinished red, early-cancelled grey persist af
     .click();
   await page.getByRole("link", { name: "Timetable", exact: true }).click();
   await expect(page.locator(".time-block.task.session-completed")).toHaveCount(
-    1,
+    3,
   );
-  await expect(page.locator(".time-block.task.session-retired")).toHaveCount(1);
+  await expect(page.locator(".time-block.task.session-retired")).toHaveCount(0);
   const detail = (
     await (
       await page.request.get(`${base}/tasks/${task.id}`, { headers: u.headers })

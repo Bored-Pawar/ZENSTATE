@@ -1,5 +1,10 @@
 import { useEffect, useState, useRef } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { api } from "../services/apiConfig";
 import { formatInstant } from "../services/dates";
@@ -11,6 +16,7 @@ import PlacementForm from "../components/PlacementForm";
 import SessionEditor from "../components/SessionEditor";
 import { sessionPresentation } from "../services/dates";
 export default function TaskDetail() {
+  const [searchParams] = useSearchParams();
   const { taskId } = useParams(),
     { state, act, zone, conversationAction } = useApp(),
     navigate = useNavigate();
@@ -59,9 +65,9 @@ export default function TaskDetail() {
   useEffect(() => {
     setMissing(false);
     setEdit(false);
-    setPlacing(false);
+    setPlacing(searchParams.get("placement") === "choose");
     setSessionEditing(null);
-  }, [taskId]);
+  }, [taskId, searchParams]);
   if (missing)
     return (
       <p role="status">
@@ -72,6 +78,7 @@ export default function TaskDetail() {
     return (
       <p className={error ? "error" : ""}>{error || "Loading saved task…"}</p>
     );
+  const multiDay = task.taskType === "multi_day";
   const sessions = task.sessions || [],
     completedMinutes = sessions
       .filter((s) => s.status === "completed")
@@ -99,6 +106,12 @@ export default function TaskDetail() {
           {task.placementMode} · {task.status}
         </p>
         <h2>{task.title}</h2>
+        {multiDay && (
+          <p>
+            {task.goalStartDate} to {task.goalEndDate} · {task.durationMinutes}{" "}
+            preferred minutes per daily session
+          </p>
+        )}
         <p className="detail-note">
           {task.motivation || "Give this task a clear, manageable finish line."}
         </p>
@@ -114,7 +127,9 @@ export default function TaskDetail() {
           >
             {task.status === "completed"
               ? "Reopen as held"
-              : "Complete task early"}
+              : multiDay
+                ? "Complete goal"
+                : "Complete task early"}
           </AsyncButton>
           <button className="secondary" onClick={() => setEdit(!edit)}>
             Edit details
@@ -122,9 +137,13 @@ export default function TaskDetail() {
           <button
             className="secondary"
             disabled={task.status === "completed"}
-            onClick={() => setPlacing(!placing)}
+            onClick={() => {
+              if (!placing && multiDay)
+                setPlacement({ placementMode: "scheduled", sessions: [] });
+              setPlacing(!placing);
+            }}
           >
-            Reschedule / change placement
+            {multiDay ? "Schedule a day" : "Change placement"}
           </button>
         </div>
         <p className="hint">
@@ -141,13 +160,20 @@ export default function TaskDetail() {
         )}
         {placing && (
           <section className="review-card">
-            <h3>Place remaining work · {remaining} minutes</h3>
+            <h3>
+              {multiDay
+                ? "Schedule a day"
+                : `Place remaining work · ${remaining} minutes`}
+            </h3>
             <PlacementForm
               value={placement}
               onChange={setPlacement}
-              durationMinutes={remaining}
+              durationMinutes={multiDay ? task.durationMinutes : remaining}
               taskId={task.id}
               deadlineDate={task.deadlineDate}
+              multiDay={multiDay}
+              goalStartDate={task.goalStartDate}
+              goalEndDate={task.goalEndDate}
             />
             <AsyncButton
               className="primary"
@@ -289,12 +315,22 @@ export default function TaskDetail() {
         </article>
         <article className="progress-card">
           <p>Completed session effort</p>
-          <div className="progress">
-            <span style={{ width: `${percent}%` }} />
-          </div>
+          {!multiDay && (
+            <div className="progress">
+              <span style={{ width: `${percent}%` }} />
+            </div>
+          )}
           <strong>
-            {completedMinutes} / {task.durationMinutes} planned minutes
+            {multiDay
+              ? `${sessions.filter((s) => s.status === "completed").length} sessions completed · ${completedMinutes} completed planned minutes`
+              : `${completedMinutes} / ${task.durationMinutes} planned minutes`}
           </strong>
+          {multiDay && (
+            <p>
+              Planned session effort, not actual tracked time. The goal stays
+              active until you choose Complete goal.
+            </p>
+          )}
           <p>
             {task.status === "completed"
               ? "Task completed"
