@@ -1,56 +1,93 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useApp } from "../context/AppContext";
-import { mockRequest } from "../services/apiConfig";
-
-const prompts = [
-  "What is one goal that would make this week feel meaningful?",
-  "Why does this goal matter to you right now?",
-  "How much focused time will it need? You can write a number of minutes.",
-];
-
+import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { usePlanning } from "../services/usePlanning";
+import { api } from "../services/apiConfig";
 export default function Planner() {
-  const { state, dispatch } = useApp();
-  const navigate = useNavigate();
-  const [messages, setMessages] = useState([{ role: "zen", text: prompts[0] }]);
-  const [text, setText] = useState("");
-  const [step, setStep] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [apiState, setApiState] = useState("Ready to simulate a planner endpoint");
-
-  const send = async (event) => {
-    event.preventDefault();
-    if (!text.trim() || loading) return;
-    const answer = text.trim();
-    const nextStep = step + 1;
-    setText("");
-    setLoading(true);
-    setApiState("Calling planner chat endpoint…");
-    setMessages((current) => [...current, { role: "you", text: answer }]);
-
-    const reply = await mockRequest("plannerReplies/1", {
-      text:
-        step < 2
-          ? prompts[nextStep]
-          : "Great. I have captured the goal, your reason, and the time needed. Let’s review it before checking your timetable.",
-    });
-
-    if (step === 0) dispatch({ type: "SET_PLAN_DRAFT", value: { goal: answer } });
-    if (step === 1) dispatch({ type: "SET_PLAN_DRAFT", value: { why: answer } });
-    if (step === 2) {
-      const parsedDuration = Number(answer.match(/\d+/)?.[0]);
-      dispatch({
-        type: "SET_PLAN_DRAFT",
-        value: { duration: parsedDuration || state.planningDraft?.duration || 90 },
-      });
+  const {
+      state,
+      conversationAction,
+      loadConversation,
+      error,
+      setError,
+      loading,
+      remember,
+      path,
+    } = usePlanning(),
+    navigate = useNavigate();
+  const [text, setText] = useState(""),
+    [busy, setBusy] = useState(false),
+    [older, setOlder] = useState([]),
+    [cursor, setCursor] = useState(undefined);
+  const conversation = state.conversation;
+  useEffect(() => {
+    setOlder([]);
+    setCursor(undefined);
+  }, [conversation?.id]);
+  const olderCursor = cursor === undefined ? state.nextBefore : cursor;
+  const loadOlder = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api(
+        `/planner/conversations/${conversation.id}?before=${olderCursor}`,
+      );
+      setOlder((previous) => [...data.messages, ...previous]);
+      setCursor(data.nextBefore);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
     }
-
-    setMessages((current) => [...current, { role: "zen", text: reply.text }]);
-    setApiState(`Planner reply received from ${reply.source}`);
-    setLoading(false);
-    setStep(nextStep);
   };
-
+  const start = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const d = await conversationAction("/planner/conversations", {});
+      remember(d.conversation);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const send = async (e, retry) => {
+    e?.preventDefault();
+    if (busy) return;
+    const content = retry?.content || text.trim();
+    if (!content) return;
+    setBusy(true);
+    setError("");
+    let id = conversation?.id;
+    try {
+      if (!id) {
+        const d = await conversationAction("/planner/conversations", {});
+        id = d.conversation.id;
+        remember(d.conversation);
+      }
+      const failed = state.messages.findLast(
+        (m) =>
+          m.role === "user" &&
+          m.content === content &&
+          m.status !== "responded",
+      );
+      await conversationAction(`/planner/conversations/${id}/messages`, {
+        content,
+        clientMessageId:
+          retry?.clientMessageId ||
+          failed?.clientMessageId ||
+          crypto.randomUUID(),
+      });
+      setText("");
+    } catch (e) {
+      setError(e.message);
+      if (id) await loadConversation(id).catch(() => {});
+    } finally {
+      setBusy(false);
+    }
+  };
+  const draft = state.planningTask || conversation?.draft || {},
+    ready = Boolean(draft.goal && draft.motivation && draft.durationMinutes);
   return (
     <div className="planner-layout">
       <section className="coach-chat">
@@ -58,49 +95,133 @@ export default function Planner() {
           <div>
             <span className="zen-avatar">z</span>
             <strong>Zen, your planning guide</strong>
-            <small>Goal → reason → time → availability</small>
+            <small>Chat → review → availability → confirmation</small>
           </div>
-          <span className="status">Demo ready</span>
+          <button
+            className="text-link"
+            disabled={busy || loading}
+            onClick={start}
+          >
+            New plan
+          </button>
         </div>
         <div className="messages">
-          {messages.map((message, index) => (
-            <div key={index} className={`message ${message.role}`}>
-              <span>{message.role === "zen" ? "ZEN" : "YOU"}</span>
-              <p>{message.text}</p>
+          {olderCursor && (
+            <button className="secondary" disabled={busy} onClick={loadOlder}>
+              Load earlier messages
+            </button>
+          )}
+          {!state.messages.length && (
+            <div className="message">
+              <span>ZEN</span>
+              <p>
+                What would you like to work on? Tell me the goal, why it
+                matters, and the time you need. Include a deadline or
+                preferences if you have them.
+              </p>
             </div>
-          ))}
+          )}
+          {[...older, ...state.messages]
+            .filter(
+              (m, i, all) => all.findIndex((other) => other.id === m.id) === i,
+            )
+            .map((m) => (
+              <div
+                className={`message ${m.role === "user" ? "you" : "zen"}`}
+                key={m.id}
+              >
+                <span>{m.role === "user" ? "YOU" : "ZEN"}</span>
+                <p>{m.content}</p>
+                {m.role === "user" && m.status === "failed" && (
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => send(null, m)}
+                  >
+                    Retry saved message
+                  </button>
+                )}
+              </div>
+            ))}
+          {busy && <p>Zen is preparing a reply…</p>}
+          {loading && <p>Restoring saved conversation…</p>}
+          {error && (
+            <p className="error" role="alert">
+              {error}
+            </p>
+          )}
         </div>
-        {step < 3 ? (
-          <form className="chat-input" onSubmit={send}>
-            <input
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              placeholder="Write what is on your mind..."
-            />
-            <button className="primary" disabled={loading}>
-              {loading ? "Thinking…" : "Send"}
-            </button>
-          </form>
-        ) : (
+        {conversation?.status === "confirmed" && (
           <div className="chat-input">
-            <button className="primary" onClick={() => navigate("/planner/review")}>
-              Review my plan
-            </button>
+            <Link
+              className="primary"
+              to={`/tasks/${conversation.confirmedTaskId}`}
+            >
+              Open confirmed task
+            </Link>
           </div>
         )}
+        <form className="chat-input" onSubmit={send}>
+          <input
+            aria-label="Message to Zen"
+            value={text}
+            maxLength={4000}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={
+              conversation?.status === "confirmed"
+                ? "Reflect on this saved task…"
+                : "What is on your mind?"
+            }
+          />
+          <button
+            className="primary"
+            disabled={busy || loading || !text.trim()}
+          >
+            Send
+          </button>
+        </form>
       </section>
       <aside className="planner-side">
         <article className="small-card">
-          <p className="eyebrow">DEMO ENDPOINT</p>
-          <h3>{apiState}</h3>
-          <p>Set a MockAPI URL later; until then, the same prepared JSON response is used locally.</p>
+          <p className="eyebrow">
+            {state.planningTask ? "CURRENT SAVED TASK" : "SAVED DRAFT"}
+          </p>
+          <h3>{draft.goal || "One new goal"}</h3>
+          <p>{draft.motivation || "Your reason will guide the reminder."}</p>
+          {state.planningTask && <p>{state.planningTask.importantContext}</p>}
+          <p>
+            {draft.durationMinutes
+              ? `${draft.durationMinutes} minutes${draft.durationEstimated ? " (estimate — edit in review)" : ""}`
+              : "Duration not yet supplied"}
+          </p>
+          <button
+            className="primary"
+            disabled={
+              !conversation ||
+              busy ||
+              loading ||
+              conversation.status === "confirmed"
+            }
+            onClick={() => navigate(path("/planner/review"))}
+          >
+            {ready ? "Review my plan" : "Fill missing details in review"}
+          </button>
         </article>
         <article className="goal-card">
           <p className="eyebrow">PLANNING PRINCIPLE</p>
-          <blockquote>“A plan should help you breathe, not prove you can do too much.”</blockquote>
-          <button className="secondary" onClick={() => navigate("/timetable")}>
+          <blockquote>
+            “A plan should help you breathe, not prove you can do too much.”
+          </blockquote>
+          <Link className="secondary" to="/timetable">
             Review timetable
-          </button>
+          </Link>
+        </article>
+        <article className="small-card">
+          <p>
+            Messages are saved before AI is called. No task is created until you
+            explicitly confirm. AI availability errors can be retried; the
+            editable review remains usable.
+          </p>
         </article>
       </aside>
     </div>

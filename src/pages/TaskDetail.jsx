@@ -1,74 +1,264 @@
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useApp } from "../context/AppContext";
+import { api } from "../services/apiConfig";
+import { formatInstant } from "../services/dates";
+import AsyncButton from "../components/AsyncButton";
+import CoachButton from "../components/CoachButton";
+import TaskForm from "../components/TaskForm";
+import NotesEditor from "../components/NotesEditor";
+import PlacementForm from "../components/PlacementForm";
 export default function TaskDetail() {
-  const { taskId } = useParams();
-  const { state, dispatch } = useApp();
-  const task = state.tasks.find((t) => t.id === taskId);
-  if (!task) return <p>Task not found.</p>;
+  const { taskId } = useParams(),
+    { state, act, zone, conversationAction } = useApp(),
+    navigate = useNavigate();
+  const [task, setTask] = useState(null),
+    [error, setError] = useState(""),
+    [edit, setEdit] = useState(false),
+    [placing, setPlacing] = useState(false),
+    [placement, setPlacement] = useState({
+      placementMode: "held",
+      sessions: [],
+    }),
+    [deleteConfirm, setDeleteConfirm] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setTask((previous) => (previous?.id === taskId ? previous : null));
+    const load = () =>
+      api(`/tasks/${taskId}`)
+        .then((t) => {
+          if (active) {
+            setTask(t);
+            setError("");
+          }
+        })
+        .catch((e) => {
+          if (active) setError(e.message);
+        });
+    load();
+    const timer = setInterval(load, 4000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [taskId, state.tasks]);
+  if (!task)
+    return (
+      <p className={error ? "error" : ""}>{error || "Loading saved task…"}</p>
+    );
+  const sessions = task.sessions || [],
+    completedMinutes = sessions
+      .filter((s) => s.status === "completed")
+      .reduce(
+        (n, s) => n + (+new Date(s.endAt) - +new Date(s.startAt)) / 60000,
+        0,
+      ),
+    remaining = Math.max(0, task.durationMinutes - completedMinutes);
+  const percent = task.durationMinutes
+    ? Math.min(100, Math.round((completedMinutes / task.durationMinutes) * 100))
+    : 0;
   return (
     <div className="detail-layout">
       <section>
+        {error && (
+          <p className="error" role="alert">
+            {error}
+          </p>
+        )}
         <Link to="/tasks" className="back-link">
           ← Back to tasks
         </Link>
         <p className="eyebrow">
-          {task.category} · {task.duration} MINUTES · {task.scheduleType === "scheduled" ? "SCHEDULED" : "FLEXIBLE TODAY"}
+          {task.category} · {task.durationMinutes} MINUTES ·{" "}
+          {task.placementMode} · {task.status}
         </p>
         <h2>{task.title}</h2>
         <p className="detail-note">
-          Give this task a small, clear finish line. It does not need to be
-          perfect to count.
+          {task.motivation || "Give this task a clear, manageable finish line."}
         </p>
         <div className="detail-actions">
-          <button
-            className={`primary ${task.done ? "complete" : ""}`}
-            onClick={() => dispatch({ type: "TOGGLE_TASK", id: task.id })}
-          >
-            {task.done ? "Completed ✓" : "Mark complete"}
-          </button>
-          <span className="priority medium">{task.priority} priority</span>
-        </div>
-        <article className="notes-editor">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">TASK NOTES</p>
-              <h3>What do you want to remember?</h3>
-            </div>
-            <span>Autosaved</span>
-          </div>
-          <textarea
-            value={task.note}
-            onChange={(e) =>
-              dispatch({
-                type: "UPDATE_TASK",
-                task: { ...task, note: e.target.value },
-              })
+          <AsyncButton
+            className="primary"
+            onClick={() =>
+              act(
+                `/tasks/${task.id}/${task.status === "completed" ? "reopen" : "complete"}`,
+                {},
+              )
             }
-            placeholder="Write notes, ideas or a reflection after you finish..."
+          >
+            {task.status === "completed"
+              ? "Reopen as held"
+              : "Complete task early"}
+          </AsyncButton>
+          <button className="secondary" onClick={() => setEdit(!edit)}>
+            Edit details
+          </button>
+          <button
+            className="secondary"
+            disabled={task.status === "completed"}
+            onClick={() => setPlacing(!placing)}
+          >
+            Change placement
+          </button>
+        </div>
+        <p className="hint">
+          Completing the task early cancels unfinished sessions. Only sessions
+          you complete count as completed planned effort.
+        </p>
+        {edit && (
+          <TaskForm
+            key={task.id}
+            task={task}
+            onSaved={() => setEdit(false)}
+            onCancel={() => setEdit(false)}
           />
-        </article>
-        {task.journalEnabled && (
-          <article className="task-journal-note">
-            <strong>Task journal enabled</strong>
-            <span>This task has a focused journal while it remains active.</span>
-          </article>
         )}
+        {placing && (
+          <section className="review-card">
+            <h3>Place remaining work · {remaining} minutes</h3>
+            <PlacementForm
+              value={placement}
+              onChange={setPlacement}
+              durationMinutes={remaining}
+              taskId={task.id}
+              deadlineDate={task.deadlineDate}
+            />
+            <AsyncButton
+              className="primary"
+              onClick={async () => {
+                await act(`/tasks/${task.id}/placement`, placement);
+                setPlacing(false);
+              }}
+            >
+              Save placement
+            </AsyncButton>
+          </section>
+        )}
+        <section className="small-card">
+          <p className="eyebrow">DATED SESSIONS · HISTORY</p>
+          {sessions.length ? (
+            sessions.map((s) => (
+              <div className="session-item" key={s.id}>
+                <div>
+                  <strong>
+                    {formatInstant(s.startAt, zone)} —{" "}
+                    {formatInstant(s.endAt, zone)}
+                  </strong>
+                  <small>
+                    {s.status}
+                    {s.supersedesSessionId
+                      ? " · replacement for missed work"
+                      : ""}
+                  </small>
+                </div>
+                {["pending", "missed"].includes(s.status) && (
+                  <AsyncButton
+                    disabled={+new Date(s.startAt) > Date.now()}
+                    onClick={() =>
+                      act(`/schedule/sessions/${s.id}/complete`, {})
+                    }
+                  >
+                    Complete session
+                  </AsyncButton>
+                )}
+              </div>
+            ))
+          ) : (
+            <p>
+              No dated sessions.{" "}
+              {task.flexibleDate
+                ? `Flexible on ${task.flexibleDate}.`
+                : "This task is held until you assign it."}
+            </p>
+          )}
+        </section>
+        <NotesEditor key={task.id} taskId={task.id} />
+        {task.sourceConversationId && (
+          <AsyncButton
+            onClick={async () => {
+              await conversationAction("/planner/conversations", {
+                taskId: task.id,
+              });
+              navigate(`/planner?conversation=${task.sourceConversationId}`);
+            }}
+          >
+            Open saved planning chat
+          </AsyncButton>
+        )}
+        <div className="flow-actions">
+          <button
+            className="text-link"
+            onClick={() => setDeleteConfirm(!deleteConfirm)}
+          >
+            Delete task…
+          </button>
+          {deleteConfirm && (
+            <>
+              <p>
+                Delete this task, sessions, notes and its conversation
+                permanently?
+              </p>
+              <AsyncButton
+                className="danger"
+                onClick={async () => {
+                  await act(`/tasks/${task.id}`, undefined, "DELETE");
+                  navigate("/tasks");
+                }}
+              >
+                Confirm deletion
+              </AsyncButton>
+            </>
+          )}
+        </div>
       </section>
       <aside>
         <article className="small-card">
-          <p className="eyebrow">A SMALL START</p>
-          <h3>Try ten minutes.</h3>
+          <p className="eyebrow">LATEST IMPORTANT CONTEXT</p>
+          <p className="preserve-lines">
+            {task.importantContext || "Preparing current context…"}
+          </p>
+          <p className="hint">
+            {task.contextProcessingStatus === "failed"
+              ? "AI unavailable: current-source template is ready. Retry when connected."
+              : task.contextProcessingStatus === "pending"
+                ? "Refreshing saved notes and progress…"
+                : "Up to date"}{" "}
+            · version {task.contextVersion}
+          </p>
+          <AsyncButton
+            onClick={() => act(`/tasks/${task.id}/context/refresh`, {})}
+          >
+            Refresh context and message
+          </AsyncButton>
+        </article>
+        <article className="small-card">
+          <p className="eyebrow">PREPARED MOTIVATION</p>
           <p>
-            Open the first source or write the first three rough points.
-            Momentum is easier after motion.
+            {task.motivationalMessage ||
+              "Preparing a message from your saved task."}
+          </p>
+          <small>{task.messageStatus || "pending"}</small>
+          <CoachButton
+            text={task.motivationalMessage}
+            label="Preview reminder"
+          />
+          <p className="hint">
+            Preview plays this saved text without consuming a reminder.
           </p>
         </article>
         <article className="progress-card">
-          <p>Task progress</p>
+          <p>Completed session effort</p>
           <div className="progress">
-            <span style={{ width: task.done ? "100%" : "32%" }}></span>
+            <span style={{ width: `${percent}%` }} />
           </div>
-          <strong>{task.done ? "Complete" : "In progress"}</strong>
+          <strong>
+            {completedMinutes} / {task.durationMinutes} planned minutes
+          </strong>
+          <p>
+            {task.status === "completed"
+              ? "Task completed"
+              : "Sessions and task completion are tracked separately."}
+          </p>
         </article>
       </aside>
     </div>

@@ -1,96 +1,183 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useMemo,
-  useReducer,
-} from "react";
-import { initialBlocks, initialJournal, initialTasks } from "../data/demoData";
-
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { api, setToken, hasToken } from "../services/apiConfig";
+import { weekStart, localToday, browserZone } from "../services/dates";
 const AppContext = createContext();
-const defaultState = {
-  user: { name: "Aditya", email: "aditya@zenstate.app" },
-  blocks: initialBlocks,
-  tasks: initialTasks,
-  journal: initialJournal,
-  coachPlaying: false,
-  planningDraft: {
-    goal: "Prepare the ZenState classroom demonstration",
-    why: "I want to feel confident explaining the product flow.",
-    duration: 90,
-    journalEnabled: true,
-    scheduleType: "scheduled",
-    selectedSlots: [{ day: "Tue", start: 17, end: 18.5 }],
-  },
+const empty = {
+  user: null,
+  tasks: [],
+  blocks: [],
+  journal: [],
+  conversation: null,
+  planningTask: null,
+  messages: [],
+  hasMore: false,
+  nextBefore: null,
 };
-const saved = localStorage.getItem("zenstate-demo");
-const persisted = saved ? JSON.parse(saved) : null;
-const initialState = persisted
-  ? {
-      ...defaultState,
-      ...persisted,
-      tasks: persisted.tasks.map((task) => ({
-        ...initialTasks.find((item) => item.id === task.id),
-        ...task,
-      })),
-      planningDraft: { ...defaultState.planningDraft, ...persisted.planningDraft },
-    }
-  : defaultState;
-function reducer(state, action) {
-  switch (action.type) {
-    case "TOGGLE_TASK":
-      return {
-        ...state,
-        tasks: state.tasks.map((t) =>
-          t.id === action.id ? { ...t, done: !t.done } : t,
-        ),
-      };
-    case "ADD_TASK":
-      return { ...state, tasks: [...state.tasks, action.task] };
-    case "UPDATE_TASK":
-      return {
-        ...state,
-        tasks: state.tasks.map((t) =>
-          t.id === action.task.id ? action.task : t,
-        ),
-      };
-    case "ADD_BLOCK":
-      return { ...state, blocks: [...state.blocks, action.block] };
-    case "DELETE_BLOCK":
-      return {
-        ...state,
-        blocks: state.blocks.filter((b) => b.id !== action.id),
-      };
-    case "ADD_JOURNAL":
-      return { ...state, journal: [action.entry, ...state.journal] };
-    case "SET_COACH":
-      return { ...state, coachPlaying: action.value };
-    case "SET_PLAN_DRAFT":
-      return { ...state, planningDraft: { ...state.planningDraft, ...action.value } };
-    case "ADD_TASK_AND_BLOCKS":
-      return {
-        ...state,
-        tasks: [...state.tasks, action.task],
-        blocks: [...state.blocks, ...action.blocks],
-      };
-    case "UPDATE_BLOCK":
-      return {
-        ...state,
-        blocks: state.blocks.map((block) =>
-          block.id === action.block.id ? action.block : block,
-        ),
-      };
-    default:
-      return state;
-  }
-}
 export function AppProvider({ children }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
-  useEffect(
-    () => localStorage.setItem("zenstate-demo", JSON.stringify(state)),
-    [state],
+  const [state, setState] = useState(empty),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(""),
+    [, setClockTick] = useState(0);
+  const generation = useRef(0),
+    refreshVersion = useRef(0),
+    userRef = useRef(null),
+    conversationRequest = useRef(0);
+  const logout = () => {
+    generation.current++;
+    conversationRequest.current++;
+    userRef.current = null;
+    setToken(null);
+    setState(empty);
+    setLoading(false);
+    setError("");
+    window.speechSynthesis?.cancel();
+  };
+  const refresh = async (user = userRef.current) => {
+    if (!user) return;
+    const epoch = generation.current,
+      sequence = ++refreshVersion.current;
+    const [tasks, blocks, journal] = await Promise.all([
+      api("/tasks"),
+      api(`/schedule?weekStart=${weekStart(user.timezone)}`),
+      api("/notes"),
+    ]);
+    if (epoch === generation.current && sequence === refreshVersion.current)
+      setState((s) => ({ ...s, user, tasks, blocks, journal }));
+  };
+  useEffect(() => {
+    let active = true;
+    const epoch = generation.current;
+    if (!hasToken()) {
+      setLoading(false);
+      return;
+    }
+    api("/auth/me")
+      .then(async (user) => {
+        if (!active || epoch !== generation.current) return;
+        userRef.current = user;
+        await refresh(user);
+      })
+      .catch((e) => {
+        if (active && epoch === generation.current) {
+          if (e.status === 401) logout();
+          setError(e.message);
+        }
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    const on401 = () => {
+      logout();
+      setError("Your session expired. Please sign in again.");
+    };
+    window.addEventListener("zenstate-unauthorised", on401);
+    return () => window.removeEventListener("zenstate-unauthorised", on401);
+  }, []);
+  useEffect(() => {
+    if (!state.user) return;
+    const check = () => {
+      const epoch = generation.current;
+      setClockTick((t) => t + 1);
+      refresh().catch((e) => {
+        if (epoch === generation.current) setError(e.message);
+      });
+    };
+    const timer = setInterval(check, 30000);
+    window.addEventListener("focus", check);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", check);
+    };
+  }, [state.user?.id]);
+  const authenticate = async (mode, body) => {
+    const epoch = ++generation.current;
+    setState(empty);
+    userRef.current = null;
+    const data = await api(`/auth/${mode}`, { method: "POST", body });
+    if (epoch !== generation.current) return;
+    setToken(data.token);
+    userRef.current = data.user;
+    await refresh(data.user);
+    setError("");
+    return data.user;
+  };
+  const act = async (path, body, method = "POST") => {
+    const epoch = generation.current;
+    const result = await api(path, { method, body });
+    if (epoch === generation.current) {
+      try {
+        await refresh();
+      } catch (e) {
+        if (epoch === generation.current)
+          setError(
+            `Change saved, but the view could not refresh. ${e.message}`,
+          );
+      }
+    }
+    return epoch === generation.current ? result : null;
+  };
+  const saveUser = async (body, complete = false) => {
+    const epoch = generation.current;
+    const user = await api(complete ? "/onboarding/complete" : "/users/me", {
+      method: complete ? "POST" : "PATCH",
+      body,
+    });
+    if (epoch === generation.current) {
+      userRef.current = user;
+      await refresh(user);
+    }
+    return user;
+  };
+  const loadConversation = async (id) => {
+    const epoch = generation.current,
+      sequence = ++conversationRequest.current;
+    const data = await api(`/planner/conversations/${id}`);
+    if (
+      epoch === generation.current &&
+      sequence === conversationRequest.current
+    )
+      setState((s) => ({ ...s, ...data }));
+    return data;
+  };
+  const conversationAction = async (path, body, method = "POST") => {
+    const epoch = generation.current,
+      sequence = ++conversationRequest.current;
+    const data = await api(path, { method, body });
+    if (
+      epoch === generation.current &&
+      sequence === conversationRequest.current
+    )
+      setState((s) => ({ ...s, ...data }));
+    return data;
+  };
+  const setConversation = (data) => setState((s) => ({ ...s, ...data }));
+  const zone = state.user?.timezone || browserZone();
+  return (
+    <AppContext.Provider
+      value={{
+        state,
+        loading,
+        error,
+        setError,
+        logout,
+        authenticate,
+        refresh,
+        act,
+        saveUser,
+        loadConversation,
+        conversationAction,
+        setConversation,
+        zone,
+        today: localToday(zone),
+      }}
+    >
+      {children}
+    </AppContext.Provider>
   );
-  const value = useMemo(() => ({ state, dispatch }), [state]);
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
 export const useApp = () => useContext(AppContext);

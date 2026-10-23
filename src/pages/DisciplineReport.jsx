@@ -1,84 +1,139 @@
-import CoachButton from "../components/CoachButton";
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
+import { api } from "../services/apiConfig";
+import { weekStart, addDays, DateTime } from "../services/dates";
+import CoachButton from "../components/CoachButton";
+import AsyncButton from "../components/AsyncButton";
 export default function DisciplineReport() {
-  const { state } = useApp();
-  const done = state.tasks.filter((t) => t.done).length;
-  const percent = Math.round((done / state.tasks.length) * 100);
-  const missed = state.tasks.filter((t) => !t.done && t.due === "Today");
+  const { state, zone, act } = useApp(),
+    [week, setWeek] = useState(() => weekStart(zone)),
+    [report, setReport] = useState(null),
+    [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setReport(null);
+    api(`/reports/weekly?weekStart=${week}`)
+      .then((r) => {
+        if (active) {
+          setReport(r);
+          setError("");
+        }
+      })
+      .catch((e) => {
+        if (active) setError(e.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [week, state.tasks, state.blocks]);
+  if (!report)
+    return (
+      <p className={error ? "error" : ""}>
+        {error || "Calculating saved weekly data…"}
+      </p>
+    );
+  const max = Math.max(1, ...report.daily.map((d) => d.completedMinutes));
   return (
     <div>
+      <div className="toolbar">
+        <button
+          className="secondary"
+          onClick={() => setWeek(addDays(week, -7))}
+        >
+          ← Previous week
+        </button>
+        <strong>
+          {week} — {addDays(week, 6)}
+        </strong>
+        <button className="secondary" onClick={() => setWeek(addDays(week, 7))}>
+          Next week →
+        </button>
+      </div>
       <section className="report-hero">
         <div>
           <p className="eyebrow">YOUR WEEK IN REVIEW</p>
           <h2>Progress is a pattern, not a verdict.</h2>
           <p>
-            You showed up for {done} of {state.tasks.length} planned tasks. The
-            aim is honesty, then a kinder adjustment.
+            {report.completedSessions} completed · {report.missedSessions}{" "}
+            missed · {report.upcomingSessions} upcoming or active sessions.
           </p>
-          <CoachButton />
+          <p>
+            {report.completedMinutes} / {report.plannedMinutes} planned minutes
+            completed. {report.completedTasks} tasks completed this week.
+          </p>
+          <CoachButton text={report.coachText} />
         </div>
         <div className="report-score">
-          <strong>{percent}%</strong>
-          <span>
-            completion
-            <br />
-            rhythm
-          </span>
+          <strong>{report.completionPercent}%</strong>
+          <span>session completion</span>
         </div>
       </section>
       <div className="report-grid">
         <section className="chart-card">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">CONSISTENCY</p>
-              <h3>Your focus over seven days</h3>
-            </div>
-            <span className="chart-key">Completed</span>
-          </div>
+          <p className="eyebrow">COMPLETED PLANNED MINUTES · BY SESSION DATE</p>
+          <h3>Your focus over seven days</h3>
           <div className="bar-chart">
-            {[42, 68, 55, 83, 60, 35, 72].map((v, i) => (
-              <div key={i}>
-                <span style={{ height: `${v}%` }}></span>
-                <small>{["M", "T", "W", "T", "F", "S", "S"][i]}</small>
+            {report.daily.map((d) => (
+              <div
+                key={d.date}
+                title={`${d.date}: ${d.completedMinutes} completed planned minutes, ${d.plannedSessions} sessions`}
+              >
+                <small>{d.completedMinutes}</small>
+                <span
+                  style={{ height: `${(d.completedMinutes / max) * 75}%` }}
+                />
+                <small>{DateTime.fromISO(d.date).toFormat("ccc")}</small>
               </div>
             ))}
           </div>
+          <p className="hint">
+            Planned session effort, not measured time tracking. Cancelled
+            sessions are excluded.
+          </p>
         </section>
         <section className="coach-panel">
-          <p className="eyebrow">COACH MESSAGE</p>
-          <h3>“You lost momentum on Thursday, not your ability to finish.”</h3>
-          <p>
-            The pattern suggests your plan becomes too tight after busy days.
-            Next week, leave one evening intentionally empty.
-          </p>
-          <div className="audio-line">
-            <span className="play-dot">▶</span>
-            <i></i>
-            <i></i>
-            <i></i>
-            <i></i>
-            <i></i>
-            <span>00:26</span>
-          </div>
-          <CoachButton compact />
+          <p className="eyebrow">WEEKLY COACH</p>
+          <h3>A realistic next step.</h3>
+          <p>{report.coachText}</p>
+          <CoachButton text={report.coachText} compact />
         </section>
         <section className="missed-card">
           <p className="eyebrow">NEEDS A NEW PLACE</p>
           <h3>
-            {missed.length
-              ? `${missed.length} task${missed.length > 1 ? "s" : ""} were not completed today.`
-              : "Nothing overdue today."}
+            {report.unfinished.length
+              ? "Review unfinished work for tomorrow."
+              : "No unfinished work needs review for this week."}
           </h3>
-          {missed.map((t) => (
+          <p>
+            {report.overdueFlexible.length} overdue flexible tasks (their
+            assigned local day has ended).
+          </p>
+          {report.unfinished.map((t) => (
             <div className="missed-task" key={t.id}>
-              <span>○</span>
               <div>
-                <strong>{t.title}</strong>
-                <small>Move it, reduce it, or let it go.</small>
+                <Link to={`/tasks/${t.id}`}>{t.title}</Link>
+                <small>
+                  Missed history is retained. New placement never displaces
+                  another task.
+                </small>
+                <div className="flow-actions">
+                  {["scheduled", "flexible", "held"].map((mode) => (
+                    <AsyncButton
+                      key={mode}
+                      onClick={() => act(`/tasks/${t.id}/reschedule`, { mode })}
+                    >
+                      {mode === "scheduled"
+                        ? "Find slot tomorrow"
+                        : mode === "flexible"
+                          ? "Flexible tomorrow"
+                          : "Hold remaining work"}
+                    </AsyncButton>
+                  ))}
+                </div>
               </div>
             </div>
           ))}
-          <button className="secondary">Review tomorrow</button>
         </section>
       </div>
     </div>

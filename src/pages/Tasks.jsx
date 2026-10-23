@@ -1,32 +1,20 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import TaskRow from "../components/TaskRow";
+import TaskForm from "../components/TaskForm";
 export default function Tasks() {
-  const { state, dispatch } = useApp();
-  const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const add = (e) => {
-    e.preventDefault();
-    if (!title) return;
-    dispatch({
-      type: "ADD_TASK",
-      task: {
-        id: crypto.randomUUID(),
-        title,
-        category: "Personal",
-        due: "This week",
-        duration: 30,
-        done: false,
-        note: "",
-        priority: "Medium",
-        scheduleType: "flexible",
-        scheduledSlots: [],
-        journalEnabled: false,
-      },
-    });
-    setTitle("");
-    setOpen(false);
-  };
+  const { state, today } = useApp(),
+    [open, setOpen] = useState(false),
+    [date, setDate] = useState(""),
+    navigate = useNavigate();
+  const tasks = state.tasks.filter(
+    (t) =>
+      !date ||
+      t.flexibleDate === date ||
+      t.sessionDates?.includes(date) ||
+      t.deadlineDate === date,
+  );
   return (
     <div>
       <section className="page-intro split">
@@ -34,39 +22,61 @@ export default function Tasks() {
           <p className="eyebrow">COMMITTED, NOT CRAMMED</p>
           <h2>Tasks that serve your week.</h2>
           <p>
-            {state.tasks.filter((t) => !t.done).length} tasks left. Each one has
-            a place in the bigger picture.
+            {state.tasks.filter((t) => t.status !== "completed").length} active
+            tasks. Every task has a saved placement or a place on your held
+            list.
           </p>
         </div>
         <button className="primary" onClick={() => setOpen(!open)}>
-          Add task
+          {open ? "Close" : "Add task"}
         </button>
       </section>
       {open && (
-        <form className="quick-add" onSubmit={add}>
-          <input
-            autoFocus
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="What needs your attention?"
-          />
-          <button className="primary">Add</button>
-        </form>
+        <TaskForm
+          onSaved={(task) => navigate(`/tasks/${task.id}`)}
+          onCancel={() => setOpen(false)}
+        />
       )}
+      <div className="toolbar">
+        <label>
+          Filter date
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </label>
+        <button className="secondary" onClick={() => setDate(today)}>
+          Today
+        </button>
+        <button className="text-link" onClick={() => setDate("")}>
+          All dates
+        </button>
+      </div>
       <section className="tasks-card">
-        <p className="eyebrow task-group-title">SCHEDULED TASKS</p>
-        <div className="task-table-head">
-          <span>Task</span>
-          <span>Priority</span>
-          <span>Due</span>
-        </div>
-        {state.tasks.filter((task) => task.scheduleType === "scheduled").map((t) => (
-          <TaskRow task={t} key={t.id} />
-        ))}
-        <p className="eyebrow task-group-title flexible-label">FLEXIBLE TASKS · SHOWING TODAY</p>
-        {state.tasks.filter((task) => task.scheduleType !== "scheduled").map((t) => (
-          <TaskRow task={{ ...t, due: "Today" }} key={t.id} />
-        ))}
+        {["scheduled", "flexible", "held", "completed"].map((mode) => {
+          const group = tasks.filter((t) =>
+            mode === "completed"
+              ? t.status === "completed"
+              : t.status !== "completed" && t.placementMode === mode,
+          );
+          return (
+            <section key={mode}>
+              <p className="eyebrow task-group-title">
+                {mode === "flexible"
+                  ? "FLEXIBLE · ACTUAL ASSIGNED DATES"
+                  : mode.toUpperCase()}
+              </p>
+              {group.length ? (
+                group.map((t) => <TaskRow task={t} key={t.id} />)
+              ) : (
+                <p className="hint">
+                  No {mode} tasks{date ? " for this date" : ""}.
+                </p>
+              )}
+            </section>
+          );
+        })}
       </section>
     </div>
   );

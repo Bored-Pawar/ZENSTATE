@@ -1,98 +1,511 @@
-import { useMemo, useState } from "react";
-import { days } from "../data/demoData";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useApp } from "../context/AppContext";
-
-const hours = Array.from({ length: 24 }, (_, index) => index);
-const blank = { day: "Mon", start: 17, end: 18, title: "", kind: "focus" };
-const time = (hour) => `${String(Math.floor(hour)).padStart(2, "0")}:${hour % 1 ? "30" : "00"}`;
-
-export default function Timetable() {
-  const { state, dispatch } = useApp();
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState(blank);
-  const [editing, setEditing] = useState(null);
-  const flexibleMinutes = useMemo(
-    () => state.tasks.filter((task) => task.scheduleType === "flexible" && !task.done).reduce((total, task) => total + task.duration, 0),
-    [state.tasks],
+import { api } from "../services/apiConfig";
+import {
+  weekStart,
+  addDays,
+  DateTime,
+  clock,
+  minutes,
+  calendarSegments,
+  inputFromUTC,
+  localInputToUTC,
+  formatInstant,
+} from "../services/dates";
+import AsyncButton from "../components/AsyncButton";
+const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const blank = {
+  title: "",
+  kind: "fixed",
+  weekday: 1,
+  daysPreset: "selected",
+  days: [1],
+  startMinute: 540,
+  endMinute: 600,
+  endsNextDay: false,
+};
+export default function Timetable({ setup = false }) {
+  const { state, act, zone, saveUser } = useApp(),
+    navigate = useNavigate();
+  const [week, setWeek] = useState(() => weekStart(zone)),
+    [blocks, setBlocks] = useState([]),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false),
+    [loaded, setLoaded] = useState(false);
+  const [form, setForm] = useState(null),
+    [editing, setEditing] = useState(null),
+    [scope, setScope] = useState("one"),
+    [split, setSplit] = useState(""),
+    [zoneText, setZoneText] = useState(zone);
+  const dates = Array.from({ length: 7 }, (_, i) => addDays(week, i));
+  useEffect(() => {
+    let active = true;
+    setLoaded(false);
+    api(`/schedule?weekStart=${week}`)
+      .then((b) => {
+        if (active) {
+          setBlocks(b);
+          setLoaded(true);
+          setError("");
+        }
+      })
+      .catch((e) => {
+        if (active) setError(e.message);
+      });
+    return () => {
+      active = false;
+    };
+  }, [week, state.blocks]);
+  const close = () => {
+    setForm(null);
+    setEditing(null);
+    setSplit("");
+    setError("");
+  };
+  const edit = (b) => {
+    setEditing(b);
+    setScope("one");
+    setSplit("");
+    setError("");
+    if (b.recordType === "recurring") setForm({ ...blank, ...b });
+    else
+      setForm({
+        startAt: inputFromUTC(b.startAt, zone),
+        endAt: inputFromUTC(b.endAt, zone),
+      });
+  };
+  const run = async (fn) => {
+    setBusy(true);
+    setError("");
+    try {
+      await fn();
+      close();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const recurringBody = () => ({
+    ...Object.fromEntries(Object.keys(blank).map((k) => [k, form[k]])),
+    endMinute: minutes(form.endText ?? clock(form.endMinute)),
+  });
+  const save = (e) => {
+    e.preventDefault();
+    run(async () => {
+      if (editing?.recordType === "session")
+        await act(
+          `/schedule/blocks/${editing.id}`,
+          {
+            startAt: localInputToUTC(form.startAt, zone),
+            endAt: localInputToUTC(form.endAt, zone),
+          },
+          "PATCH",
+        );
+      else
+        await act(
+          editing ? `/schedule/blocks/${editing.id}` : "/schedule/blocks",
+          { ...recurringBody(), ...(editing ? { scope } : {}) },
+          editing ? "PATCH" : "POST",
+        );
+    });
+  };
+  const splitBlock = () =>
+    run(() =>
+      act(
+        `/schedule/blocks/${editing.id}/split`,
+        editing.recordType === "session"
+          ? { splitAt: localInputToUTC(split, zone) }
+          : { splitMinute: minutes(split), scope },
+      ),
+    );
+  const flex = state.tasks.filter(
+    (t) =>
+      t.placementMode === "flexible" &&
+      t.status !== "completed" &&
+      dates.includes(t.flexibleDate),
   );
-
-  const saveNew = (event) => {
-    event.preventDefault();
-    if (!form.title || Number(form.end) <= Number(form.start)) return;
-    dispatch({ type: "ADD_BLOCK", block: { ...form, id: crypto.randomUUID(), start: Number(form.start), end: Number(form.end) } });
-    setForm(blank);
-    setShowAdd(false);
-  };
-  const saveEdit = (event) => {
-    event.preventDefault();
-    dispatch({ type: "UPDATE_BLOCK", block: { ...editing, start: Number(editing.start), end: Number(editing.end) } });
-    setEditing(null);
-  };
-  const splitBlock = () => {
-    const middle = Math.round(((Number(editing.start) + Number(editing.end)) / 2) * 2) / 2;
-    if (middle <= editing.start || middle >= editing.end) return;
-    dispatch({ type: "DELETE_BLOCK", id: editing.id });
-    dispatch({ type: "ADD_BLOCK", block: { ...editing, id: crypto.randomUUID(), title: `${editing.title} · part 1`, end: middle } });
-    dispatch({ type: "ADD_BLOCK", block: { ...editing, id: crypto.randomUUID(), title: `${editing.title} · part 2`, start: middle } });
-    setEditing(null);
-  };
-
+  const isSession = editing?.recordType === "session";
   return (
     <div>
       <section className="page-intro split">
         <div>
-          <p className="eyebrow">YOUR ACTUAL WEEK · 24 HOURS</p>
-          <h2>Protect the hours you really have.</h2>
-          <p>Sleep and commitments are unavailable. Focus blocks and planned tasks can be moved whenever life changes.</p>
+          <p className="eyebrow">
+            {setup
+              ? "WELCOME · BUILD YOUR WEEK"
+              : "YOUR ACTUAL WEEK · 24 HOURS"}
+          </p>
+          <h2>
+            {setup
+              ? "Start with sleep and commitments."
+              : "Protect the hours you really have."}
+          </h2>
+          <p>
+            Recurring blocks repeat weekly. Task sessions belong to a real date.
+            All occupied blocks reduce availability.
+          </p>
         </div>
-        <button className="primary" onClick={() => setShowAdd(!showAdd)}>{showAdd ? "Close" : "Add a block"}</button>
+        <button
+          className="primary"
+          onClick={() => {
+            close();
+            setForm({
+              ...blank,
+              title: setup ? "Sleep" : "",
+              kind: setup ? "sleep" : "fixed",
+              daysPreset: setup ? "whole" : "selected",
+              startMinute: setup ? 1380 : 540,
+              endMinute: setup ? 420 : 600,
+              endsNextDay: setup,
+            });
+          }}
+        >
+          Add {setup ? "sleep / commitment" : "a block"}
+        </button>
       </section>
-
-      <section className="flexible-time-card">
-        <div><p className="eyebrow">FLEXIBLE RESERVED TIME</p><h3>{Math.floor(flexibleMinutes / 60)}h {flexibleMinutes % 60}m reserved</h3></div>
-        <p>Flexible tasks do not occupy a fixed timetable slot. They appear as “Today” until you decide when to complete them.</p>
-      </section>
-
-      {showAdd && (
-        <form className="inline-form" onSubmit={saveNew}>
-          <label>Day<select value={form.day} onChange={(event) => setForm({ ...form, day: event.target.value })}>{days.map((day) => <option key={day}>{day}</option>)}</select></label>
-          <label>From<input type="number" min="0" max="23.5" step="0.5" value={form.start} onChange={(event) => setForm({ ...form, start: event.target.value })} /></label>
-          <label>To<input type="number" min="0.5" max="24" step="0.5" value={form.end} onChange={(event) => setForm({ ...form, end: event.target.value })} /></label>
-          <label>What is this?<input autoFocus value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
-          <label>Type<select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })}><option value="fixed">Fixed</option><option value="focus">Focus</option></select></label>
-          <button className="primary">Save block</button>
-        </form>
+      <div className="toolbar">
+        <span>Timezone: {zone}</span>
+        <input
+          aria-label="IANA timezone"
+          value={zoneText}
+          onChange={(e) => setZoneText(e.target.value)}
+        />
+        <AsyncButton onClick={() => saveUser({ timezone: zoneText })}>
+          Save timezone
+        </AsyncButton>
+      </div>
+      {setup && (
+        <article className="small-card">
+          <p>
+            Your saved blocks remain here if you leave setup. Add sleep for all
+            seven start weekdays; use Whole week for a quick start, then edit
+            individual days.
+          </p>
+          <AsyncButton
+            className="primary"
+            onClick={async () => {
+              await saveUser({}, true);
+              navigate("/today");
+            }}
+          >
+            Finish setup
+          </AsyncButton>
+        </article>
       )}
-
-      <section className="calendar-card full-day-calendar">
-        <div className="calendar-head"><span>Time</span>{days.map((day) => <strong key={day}>{day}</strong>)}</div>
-        <div className="calendar-body">
-          <div className="hour-labels">{hours.map((hour) => <span key={hour}>{time(hour)}</span>)}</div>
-          {days.map((day) => (
-            <div className="day-column" key={day}>
-              {hours.map((hour) => <div className="hour-line" key={hour}></div>)}
-              <div className="sleep-block" style={{ top: 0, height: `${7 * 30}px` }}>Sleep · 12 AM–7 AM</div>
-              <div className="sleep-block" style={{ top: `${22 * 30}px`, height: `${2 * 30}px` }}>Sleep · 10 PM–12 AM</div>
-              {state.blocks.filter((block) => block.day === day).map((block) => (
-                <button key={block.id} className={`time-block ${block.kind}`} onClick={() => setEditing(block)} style={{ top: `${block.start * 30}px`, height: `${Math.max((block.end - block.start) * 30 - 4, 28)}px` }}>
-                  <strong>{block.title}</strong><small>{time(block.start)} – {time(block.end)}</small>
-                </button>
+      <div className="toolbar">
+        <button
+          className="secondary"
+          onClick={() => setWeek(addDays(week, -7))}
+        >
+          ← Previous week
+        </button>
+        <strong>
+          {week} — {addDays(week, 6)}
+        </strong>
+        <button className="secondary" onClick={() => setWeek(addDays(week, 7))}>
+          Next week →
+        </button>
+      </div>
+      <section className="flexible-time-card">
+        <div>
+          <p className="eyebrow">FLEXIBLE RESERVED TIME · THIS WEEK</p>
+          <h3>
+            {flex.reduce(
+              (n, t) =>
+                n +
+                Math.max(
+                  0,
+                  t.durationMinutes - (t.completedPlannedMinutes || 0),
+                ),
+              0,
+            )}{" "}
+            minutes
+          </h3>
+        </div>
+        <p>
+          {flex.length
+            ? flex.map((t) => `${t.title} · ${t.flexibleDate}`).join(" | ")
+            : "No flexible reservations for these dates."}
+        </p>
+      </section>
+      {error && !form && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      {!loaded && <p>Loading timetable…</p>}
+      <div className="calendar-scroll">
+        <section className="calendar-card full-day-calendar">
+          <div className="calendar-head">
+            <span>Time</span>
+            {dates.map((date, i) => (
+              <strong key={date}>
+                {days[i]}
+                <small>{DateTime.fromISO(date).toFormat("d LLL")}</small>
+              </strong>
+            ))}
+          </div>
+          <div className="calendar-body">
+            <div className="hour-labels">
+              {Array.from({ length: 24 }, (_, h) => (
+                <span key={h}>{clock(h * 60)}</span>
               ))}
             </div>
-          ))}
+            {dates.map((date) => (
+              <div className="day-column" key={date}>
+                {Array.from({ length: 24 }, (_, h) => (
+                  <div className="hour-line" key={h} />
+                ))}
+                {calendarSegments(blocks, date, zone).map((b, i) => (
+                  <button
+                    key={`${b.id}-${i}`}
+                    className={`time-block ${b.kind} ${b.status || ""}`}
+                    style={{
+                      top: `${b.displayStart / 2}px`,
+                      height: `${Math.max((b.displayEnd - b.displayStart) / 2 - 2, 12)}px`,
+                    }}
+                    onClick={() => edit(b)}
+                  >
+                    <strong>{b.title}</strong>
+                    <small>
+                      {clock(b.displayStart)}–{clock(b.displayEnd)}
+                      {b.status ? ` · ${b.status}` : ""}
+                    </small>
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+      <p className="hint">
+        Click saved sleep or any block to edit it. Overnight blocks continue
+        into the next day. Session deletion offers to hold remaining work.
+      </p>
+      {form && (
+        <div className="modal-backdrop">
+          <form className="edit-modal" onSubmit={save}>
+            <p className="eyebrow">
+              {editing ? "EDIT SAVED BLOCK" : "ADD RECURRING BLOCK"}
+            </p>
+            <h3>{editing?.title || "Make room in your week"}</h3>
+            {!isSession ? (
+              <>
+                <label>
+                  Title
+                  <input
+                    required
+                    maxLength={160}
+                    value={form.title}
+                    onChange={(e) =>
+                      setForm({ ...form, title: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  Type
+                  <select
+                    value={form.kind}
+                    onChange={(e) => setForm({ ...form, kind: e.target.value })}
+                  >
+                    <option value="sleep">Sleep</option>
+                    <option value="fixed">Commitment</option>
+                    <option value="focus">Focus (occupied)</option>
+                  </select>
+                </label>
+                {!editing && (
+                  <label>
+                    Days
+                    <select
+                      value={form.daysPreset}
+                      onChange={(e) =>
+                        setForm({ ...form, daysPreset: e.target.value })
+                      }
+                    >
+                      <option value="selected">Selected day</option>
+                      <option value="weekdays">Weekdays</option>
+                      <option value="weekends">Weekends</option>
+                      <option value="whole">Whole week</option>
+                      <option value="custom">Custom days</option>
+                    </select>
+                  </label>
+                )}
+                {(form.daysPreset === "selected" || editing) && (
+                  <label>
+                    Start weekday
+                    <select
+                      disabled={Boolean(editing && scope === "group")}
+                      value={form.weekday}
+                      onChange={(e) =>
+                        setForm({ ...form, weekday: Number(e.target.value) })
+                      }
+                    >
+                      {days.map((d, i) => (
+                        <option key={d} value={i + 1}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {!editing && form.daysPreset === "custom" && (
+                  <div className="day-choices">
+                    {days.map((d, i) => (
+                      <label key={d}>
+                        <input
+                          type="checkbox"
+                          checked={form.days.includes(i + 1)}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              days: e.target.checked
+                                ? [...form.days, i + 1]
+                                : form.days.filter((x) => x !== i + 1),
+                            })
+                          }
+                        />
+                        {d}
+                      </label>
+                    ))}
+                  </div>
+                )}
+                <label>
+                  From (HH:mm)
+                  <input
+                    required
+                    pattern="([01][0-9]|2[0-3]):[0-5][0-9]"
+                    value={clock(form.startMinute)}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setForm({ ...form, startMinute: minutes(v) });
+                    }}
+                    type="time"
+                  />
+                </label>
+                <label>
+                  To (24:00 means end of day)
+                  <input
+                    required
+                    pattern="([01][0-9]|2[0-3]):[0-5][0-9]|24:00"
+                    value={form.endText ?? clock(form.endMinute)}
+                    onChange={(e) =>
+                      setForm({ ...form, endText: e.target.value })
+                    }
+                  />
+                </label>
+                <label className="toggle-line">
+                  <input
+                    type="checkbox"
+                    checked={form.endsNextDay}
+                    onChange={(e) =>
+                      setForm({ ...form, endsNextDay: e.target.checked })
+                    }
+                  />
+                  Ends next day
+                </label>
+                {editing && (
+                  <label>
+                    Apply to
+                    <select
+                      value={scope}
+                      onChange={(e) => setScope(e.target.value)}
+                    >
+                      <option value="one">This day</option>
+                      <option value="group">Entire group</option>
+                    </select>
+                  </label>
+                )}
+              </>
+            ) : (
+              <>
+                <p>
+                  {formatInstant(editing.startAt, zone)} —{" "}
+                  {formatInstant(editing.endAt, zone)} · {editing.status}
+                </p>
+                <label>
+                  Start
+                  <input
+                    type="datetime-local"
+                    required
+                    value={form.startAt}
+                    onChange={(e) =>
+                      setForm({ ...form, startAt: e.target.value })
+                    }
+                  />
+                </label>
+                <label>
+                  End (keep duration unchanged)
+                  <input
+                    type="datetime-local"
+                    required
+                    value={form.endAt}
+                    onChange={(e) =>
+                      setForm({ ...form, endAt: e.target.value })
+                    }
+                  />
+                </label>
+              </>
+            )}
+            {editing && (
+              <label>
+                Split at (
+                {isSession ? "local date and time" : "HH:mm, inside the block"})
+                <input
+                  type={isSession ? "datetime-local" : "time"}
+                  value={split}
+                  onChange={(e) => setSplit(e.target.value)}
+                />
+              </label>
+            )}
+            {error && (
+              <p role="alert" className="error">
+                {error}
+              </p>
+            )}
+            <div className="modal-actions">
+              <button className="primary" disabled={busy}>
+                {busy ? "Saving…" : "Save block"}
+              </button>
+              {editing && (
+                <>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={busy || !split}
+                    onClick={splitBlock}
+                  >
+                    Split
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={busy}
+                    onClick={() =>
+                      run(() =>
+                        act(
+                          `/schedule/blocks/${editing.id}?scope=${scope}`,
+                          undefined,
+                          "DELETE",
+                        ),
+                      )
+                    }
+                  >
+                    {isSession ? "Remove and hold remaining work" : "Delete"}
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="secondary"
+                disabled={busy}
+                onClick={close}
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
         </div>
-      </section>
-      <p className="hint">Click any non-sleep block to edit, move, split, convert it to flexible time, or delete it.</p>
-
-      {editing && (
-        <div className="modal-backdrop"><form className="edit-modal" onSubmit={saveEdit}>
-          <p className="eyebrow">EDIT TIMETABLE BLOCK</p><h3>{editing.title}</h3>
-          <label>Day<select value={editing.day} onChange={(event) => setEditing({ ...editing, day: event.target.value })}>{days.map((day) => <option key={day}>{day}</option>)}</select></label>
-          <label>From<input type="number" min="0" max="23.5" step="0.5" value={editing.start} onChange={(event) => setEditing({ ...editing, start: event.target.value })} /></label>
-          <label>To<input type="number" min="0.5" max="24" step="0.5" value={editing.end} onChange={(event) => setEditing({ ...editing, end: event.target.value })} /></label>
-          <div className="modal-actions"><button type="button" className="secondary" onClick={splitBlock}>Split in two</button><button type="button" className="danger" onClick={() => { dispatch({ type: "DELETE_BLOCK", id: editing.id }); setEditing(null); }}>Delete</button><button className="primary">Save changes</button></div>
-          <button type="button" className="text-link modal-close" onClick={() => setEditing(null)}>Cancel</button>
-        </form></div>
       )}
     </div>
   );

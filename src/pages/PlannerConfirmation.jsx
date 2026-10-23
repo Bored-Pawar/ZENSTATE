@@ -1,55 +1,103 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useApp } from "../context/AppContext";
-import { mockRequest } from "../services/apiConfig";
-
+import { Link } from "react-router-dom";
+import { usePlanning } from "../services/usePlanning";
+import { formatInstant } from "../services/dates";
 export default function PlannerConfirmation() {
-  const { state, dispatch } = useApp();
-  const navigate = useNavigate();
-  const draft = state.planningDraft || {};
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
-  const slots = draft.selectedSlots || [];
-
+  const { state, act, loadConversation, zone, error, setError, loading, path } =
+      usePlanning(),
+    [busy, setBusy] = useState(false),
+    [saved, setSaved] = useState(null);
+  const c = state.conversation;
+  if (!c)
+    return (
+      <p>
+        {loading ? "Restoring plan…" : error || "Start a plan first."}{" "}
+        <Link to="/planner">Planner</Link>
+      </p>
+    );
+  const d = c.draft,
+    taskId = saved?.id || c.confirmedTaskId;
   const confirm = async () => {
-    setSaving(true);
-    setMessage("Creating the task and updating the timetable…");
-    const response = await mockRequest("plannedTasks/1", { message: "Task saved" });
-    const id = crypto.randomUUID();
-    const task = {
-      id,
-      title: draft.goal || "My planned task",
-      category: "Planned with Zen",
-      due: draft.scheduleType === "flexible" ? "Today" : slots[0]?.day || "This week",
-      duration: Number(draft.duration) || 90,
-      done: false,
-      note: draft.why || "",
-      priority: "High",
-      scheduleType: draft.scheduleType || "flexible",
-      scheduledSlots: slots,
-      journalEnabled: Boolean(draft.journalEnabled),
-    };
-    const blocks = slots.map((slot) => ({ ...slot, id: crypto.randomUUID(), title: task.title, kind: "task", taskId: id }));
-    dispatch({ type: "ADD_TASK_AND_BLOCKS", task, blocks });
-    setMessage(`${response.message} through ${response.source}. Your plan is now visible across ZenState.`);
-    setSaving(false);
+    setBusy(true);
+    setError("");
+    try {
+      const task = await act(`/planner/conversations/${c.id}/confirm`, {
+        draftVersion: c.draftVersion,
+      });
+      if (task) {
+        setSaved(task);
+        await loadConversation(c.id);
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
-
   return (
     <section className="flow-page">
       <p className="eyebrow">PLAN WITH ZEN · STEP 4 OF 4</p>
-      <h2>Your plan is ready to become real.</h2>
+      <h2>
+        {taskId ? "Your plan is saved." : "Your plan is ready to become real."}
+      </h2>
       <article className="confirmation-card">
-        <div><span>Task</span><strong>{draft.goal}</strong></div>
-        <div><span>Focused time</span><strong>{draft.duration || 90} minutes</strong></div>
-        <div><span>Placement</span><strong>{draft.scheduleType === "flexible" ? "Flexible Reserved Time" : slots[0]?.label || "Scheduled time"}</strong></div>
-        <div><span>Task journal</span><strong>{draft.journalEnabled ? "Enabled" : "Not needed"}</strong></div>
+        <div>
+          <span>Task</span>
+          <strong>{d.goal}</strong>
+        </div>
+        <div>
+          <span>Focused time</span>
+          <strong>{d.durationMinutes} minutes</strong>
+        </div>
+        <div>
+          <span>Placement</span>
+          <strong>
+            {d.placementMode || "held"} {d.flexibleDate || ""}
+          </strong>
+          {d.sessions?.map((s) => (
+            <small key={s.startAt}>
+              {formatInstant(s.startAt, zone)} — {formatInstant(s.endAt, zone)}
+            </small>
+          ))}
+        </div>
+        <div>
+          <span>Your reason</span>
+          <strong>{d.motivation}</strong>
+        </div>
       </article>
-      {message && <p className="endpoint-result">{message}</p>}
+      <p className="hint">
+        Confirmation checks your latest timetable again and atomically saves the
+        task and sessions. Repeating confirmation returns the same task.
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
       <div className="flow-actions">
-        <button className="secondary" onClick={() => navigate("/planner/availability")}>Change placement</button>
-        <button className="primary" disabled={saving || Boolean(message)} onClick={confirm}>{saving ? "Saving…" : "Add plan to ZenState"}</button>
-        {message && <button className="primary" onClick={() => navigate("/timetable")}>View in timetable</button>}
+        {!taskId ? (
+          <>
+            <Link className="secondary" to={path("/planner/availability")}>
+              Change placement
+            </Link>
+            <button
+              className="primary"
+              disabled={busy || loading}
+              onClick={confirm}
+            >
+              {busy ? "Confirming…" : "Confirm and add plan"}
+            </button>
+          </>
+        ) : (
+          <>
+            <Link className="primary" to={`/tasks/${taskId}`}>
+              Open saved task
+            </Link>
+            <Link className="secondary" to="/timetable">
+              View timetable
+            </Link>
+          </>
+        )}
       </div>
     </section>
   );

@@ -1,58 +1,78 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useApp } from "../context/AppContext";
-import { mockRequest } from "../services/apiConfig";
-
-const suggestions = [
-  { day: "Tue", start: 17, end: 18.5, label: "Tuesday · 5:00 PM–6:30 PM" },
-  { day: "Thu", start: 17, end: 18.5, label: "Thursday · 5:00 PM–6:30 PM" },
-];
-
+import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { usePlanning } from "../services/usePlanning";
+import PlacementForm from "../components/PlacementForm";
 export default function PlannerAvailability() {
-  const { state, dispatch } = useApp();
-  const navigate = useNavigate();
-  const [status, setStatus] = useState("Analysing timetable availability…");
-  const [selected, setSelected] = useState(0);
-  const draft = state.planningDraft || {};
-
-  useEffect(() => {
-    mockRequest("availability/1", { message: "Two realistic evening windows found." }).then((result) => setStatus(`${result.message} (${result.source})`));
-  }, []);
-
-  const useScheduled = () => {
-    dispatch({ type: "SET_PLAN_DRAFT", value: { scheduleType: "scheduled", selectedSlots: [suggestions[selected]] } });
-    navigate("/planner/confirmation");
+  const { state, conversationAction, error, setError, loading, path } =
+      usePlanning(),
+    navigate = useNavigate(),
+    [busy, setBusy] = useState(false),
+    [selection, setSelection] = useState(null);
+  const c = state.conversation;
+  if (!c)
+    return (
+      <p>
+        {loading ? "Loading draft…" : error || "Start a plan first."}{" "}
+        <Link to="/planner">Planner</Link>
+      </p>
+    );
+  const d = c.draft,
+    p = selection || {
+      placementMode: d.placementMode || "scheduled",
+      sessions: d.sessions || [],
+      flexibleDate: d.flexibleDate,
+      flexibleReminderAt: d.flexibleReminderAt,
+    };
+  const save = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await conversationAction(
+        `/planner/conversations/${c.id}/draft`,
+        { draftVersion: c.draftVersion, updates: p },
+        "PATCH",
+      );
+      navigate(path("/planner/confirmation"));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
-  const useFlexible = () => {
-    dispatch({ type: "SET_PLAN_DRAFT", value: { scheduleType: "flexible", selectedSlots: [] } });
-    navigate("/planner/confirmation");
-  };
-
   return (
     <section className="flow-page">
       <p className="eyebrow">PLAN WITH ZEN · STEP 3 OF 4</p>
-      <h2>There is room for this without using your sleep.</h2>
-      <p className="flow-copy">{status} This plan needs {draft.duration || 90} minutes. Choose a fixed slot or reserve flexible time for it.</p>
-      <div className="availability-grid">
-        <article className="availability-card">
-          <p className="eyebrow">SCHEDULED TASK</p>
-          <h3>Place it in a real time slot</h3>
-          {suggestions.map((slot, index) => (
-            <label className="slot-option" key={slot.label}>
-              <input type="radio" checked={selected === index} onChange={() => setSelected(index)} />
-              <span>{slot.label}</span>
-            </label>
-          ))}
-          <button className="primary" onClick={useScheduled}>Use selected slot</button>
-        </article>
-        <article className="availability-card flexible-card">
-          <p className="eyebrow">FLEXIBLE TASK</p>
-          <h3>Reserve the time, decide the exact moment later</h3>
-          <p>{draft.duration || 90} minutes will appear in Flexible Reserved Time and show as “Today” in Tasks.</p>
-          <button className="secondary" onClick={useFlexible}>Keep it flexible</button>
-        </article>
+      <h2>Choose time that really fits.</h2>
+      <p className="flow-copy">
+        {d.durationMinutes} minutes needed. The server excludes sleep, occupied
+        commitments, task sessions, flexible reservations and elapsed time
+        today. Choose held if there is no room.
+      </p>
+      <div className="review-card">
+        <PlacementForm
+          value={p}
+          onChange={setSelection}
+          durationMinutes={d.durationMinutes || 30}
+          deadlineDate={d.deadlineDate}
+        />
       </div>
-      <button className="text-link" onClick={() => navigate("/timetable")}>Open the full timetable first</button>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="flow-actions">
+        <Link className="secondary" to={path("/planner/review")}>
+          Back to review
+        </Link>
+        <button
+          className="primary"
+          disabled={busy || loading || c.status === "confirmed"}
+          onClick={save}
+        >
+          {busy ? "Saving…" : "Review this placement"}
+        </button>
+      </div>
     </section>
   );
 }

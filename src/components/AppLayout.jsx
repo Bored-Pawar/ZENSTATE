@@ -1,6 +1,9 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
 import { useApp } from "../context/AppContext";
-import { useEffect, useState } from "react";
+import { api } from "../services/apiConfig";
+import { DateTime } from "../services/dates";
+import AsyncButton from "./AsyncButton";
 import NotificationPopup from "./NotificationPopup";
 const links = [
   ["/today", "Today", "◉"],
@@ -11,16 +14,101 @@ const links = [
   ["/discipline-report", "Discipline report", "◌"],
 ];
 export default function AppLayout() {
-  const { state } = useApp();
-  const location = useLocation();
-  const [showNotification, setShowNotification] = useState(false);
-  const [clock, setClock] = useState(new Date());
+  const { state, logout, zone, saveUser, error, setError, refresh } = useApp(),
+    location = useLocation();
+  const [clock, setClock] = useState(DateTime.now()),
+    [active, setActive] = useState(null),
+    [reminderError, setReminderError] = useState("");
+  const activeRef = useRef(null),
+    checking = useRef(false),
+    queue = useRef([]);
   useEffect(() => {
-    const timer = window.setInterval(() => setClock(new Date()), 60000);
-    return () => window.clearInterval(timer);
+    const timer = setInterval(() => setClock(DateTime.now()), 30000);
+    return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      if (checking.current) return;
+      checking.current = true;
+      try {
+        if (activeRef.current) {
+          try {
+            const valid = await api(`/reminders/${activeRef.current.id}`);
+            if (!valid.active) {
+              activeRef.current = null;
+              if (!cancelled) setActive(null);
+            }
+          } catch (e) {
+            if (e.status === 404) {
+              activeRef.current = null;
+              if (!cancelled) setActive(null);
+            } else throw e;
+          }
+        }
+        const due = await api("/reminders/due");
+        const dueIds = new Set(due.map((reminder) => reminder.id));
+        queue.current = queue.current.filter((reminder) =>
+          dueIds.has(reminder.id),
+        );
+        for (const reminder of due) {
+          if (!queue.current.some((queued) => queued.id === reminder.id))
+            queue.current.push(reminder);
+        }
+        if (!activeRef.current) {
+          while (queue.current.length) {
+            const reminder = queue.current.shift();
+            if (cancelled) break;
+            try {
+              const claimed = await api(`/reminders/${reminder.id}/delivered`, {
+                method: "POST",
+                body: {},
+              });
+              if (!cancelled) {
+                activeRef.current = claimed;
+                setActive(claimed);
+              }
+              break;
+            } catch (e) {
+              if (e.status !== 409) throw e;
+            }
+          }
+        }
+        if (!cancelled) setReminderError("");
+      } catch (e) {
+        if (!cancelled) setReminderError(e.message);
+      } finally {
+        checking.current = false;
+      }
+    };
+    check();
+    const timer = setInterval(check, 12000);
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+      window.speechSynthesis?.cancel();
+    };
+  }, [state.tasks, state.blocks]);
+  useEffect(
+    () => () => {
+      queue.current = [];
+      activeRef.current = null;
+      window.speechSynthesis?.cancel();
+    },
+    [],
+  );
+  const dismiss = () => {
+    window.speechSynthesis?.cancel();
+    activeRef.current = null;
+    setActive(null);
+  };
   const title =
-    links.find(([p]) => location.pathname.startsWith(p))?.[1] || "ZenState";
+    links.find(([p]) => location.pathname.startsWith(p))?.[1] ||
+    "Set up your week";
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -32,13 +120,14 @@ export default function AppLayout() {
         <nav>
           {links.map(([to, label, icon]) => (
             <NavLink
-              to={to}
               key={to}
+              to={to}
+              aria-label={label}
               className={({ isActive }) =>
                 `nav-link ${isActive ? "active" : ""}`
               }
             >
-              <span>{icon}</span>
+              <span aria-hidden="true">{icon}</span>
               {label}
             </NavLink>
           ))}
@@ -47,7 +136,9 @@ export default function AppLayout() {
           <div className="avatar">{state.user.name[0]}</div>
           <div>
             <strong>{state.user.name}</strong>
-            <small>Building gently</small>
+            <button className="text-link" onClick={logout}>
+              Log out
+            </button>
           </div>
         </div>
       </aside>
@@ -58,11 +149,46 @@ export default function AppLayout() {
             <h1>{title}</h1>
           </div>
           <div className="top-actions">
-            <span className="date-chip">{clock.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-            <button className="notification" onClick={() => setShowNotification(true)} title="Show reminder">●</button>
+            <span className="date-chip">
+              {clock.setZone(zone).toFormat("HH:mm")}
+            </span>
+            <AsyncButton
+              onClick={async () => {
+                window.speechSynthesis?.getVoices();
+                await saveUser({
+                  voiceRemindersEnabled: !state.user.voiceRemindersEnabled,
+                });
+              }}
+            >
+              {state.user.voiceRemindersEnabled
+                ? "Voice enabled"
+                : "Enable voice reminders"}
+            </AsyncButton>
           </div>
-          {showNotification && <NotificationPopup onClose={() => setShowNotification(false)} />}
+          {active && (
+            <NotificationPopup
+              key={active.id}
+              reminder={active}
+              onClose={dismiss}
+            />
+          )}
         </header>
+        {error && (
+          <div className="error" role="alert">
+            {error}
+            <AsyncButton
+              onClick={async () => {
+                await refresh();
+                setError("");
+              }}
+            >
+              Retry loading
+            </AsyncButton>
+          </div>
+        )}
+        {reminderError && (
+          <p className="error">Reminder check: {reminderError}</p>
+        )}
         <Outlet />
       </main>
     </div>
